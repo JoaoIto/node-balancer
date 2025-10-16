@@ -6,7 +6,7 @@ O Node Balancer é uma API escalável construída utilizando Node.js, MongoDB co
 
 ## Arquitetura - Diagrama ilustrativo
 
-![img.png](docs/diagramEscale.png)
+![img.png](docs/images/diagramEscale.png)
 
 ## Tecnologias
 
