@@ -22,4 +22,52 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 - Monitoramento: O sistema está em processo de monitoramento para garantir a continuidade e performance da aplicação.
 
+
+### Configuração Banco de Dados
+
+#### **Verifique a Configuração do Replica Set**
+
+Se você estiver usando o **MongoDB replica set**, a URL de conexão deve ser configurada corretamente para isso. Em um replica set, a URL de conexão precisa incluir **todos os membros** do replica set. A URL de conexão para um MongoDB replica set deve ser algo assim:
+
+```env
+MONGODB_URI=mongodb://localhost:27017,localhost:27018,localhost:27019/node-balancer?replicaSet=rs0
+```
+
+#### **Configuração do Replica Set no MongoDB**
+
+Se você está utilizando o **MongoDB replica set**, certifique-se de que o replica set está configurado corretamente no MongoDB:
+
+1. **Verifique se o MongoDB está rodando** no modo replica set. Você pode iniciar o MongoDB com o seguinte comando:
+
+   ```bash
+   mongod --replSet rs0
+   ```
+
+2. **Configuração do Replica Set**: Após iniciar o MongoDB, conecte-se a ele e configure o replica set:
+
+   ```bash
+   mongo
+   ```
+
+   Dentro do shell do MongoDB, inicialize o replica set:
+
+   ```javascript
+   rs.initiate({
+     _id: "rs0",
+     members: [
+       { _id: 0, host: "localhost:27017" },
+       { _id: 1, host: "localhost:27018" },
+       { _id: 2, host: "localhost:27019" }
+     ]
+   });
+   ```
+
+3. **Verifique o status do replica set**:
+
+   ```javascript
+   rs.status();
+   ```
+
+
 ---
+
