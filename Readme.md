@@ -27,6 +27,8 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 #### **Verifique a Configuração do Replica Set**
 
+- As variáveis base estão no arquivo de **``.env.local``**
+
 Se você estiver usando o **MongoDB replica set**, a URL de conexão deve ser configurada corretamente para isso. Em um replica set, a URL de conexão precisa incluir **todos os membros** do replica set. A URL de conexão para um MongoDB replica set deve ser algo assim:
 
 ```env
