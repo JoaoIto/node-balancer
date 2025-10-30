@@ -1,13 +1,20 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import { morganMiddleware, logger } from './middlewares/logger';
+import { connectDatabase } from './config/database';
 import userRoutes from './routes/user.route';
 
 dotenv.config();
+connectDatabase();
 
 const app = express();
 app.use(express.json());
+app.use(morganMiddleware);
 
-// Rotas principais
-app.use('/users', userRoutes);
+app.use('/api/users', userRoutes);
+
+app.get('/', (req, res) => {
+    res.status(200).json({ message: 'Node balancer online!' });
+});
 
 export default app;
