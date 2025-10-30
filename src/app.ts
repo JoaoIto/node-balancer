@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { morganMiddleware, logger } from './middlewares/logger';
 import { connectDatabase } from './config/database';
 import userRoutes from './routes/user.route';
+import {dbLogger} from "./middlewares/dbLogger";
 
 dotenv.config();
 connectDatabase();
@@ -10,6 +11,7 @@ connectDatabase();
 const app = express();
 app.use(express.json());
 app.use(morganMiddleware);
+app.use(dbLogger);
 
 app.use('/api/users', userRoutes);
 
