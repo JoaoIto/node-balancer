@@ -1,23 +1,68 @@
-version: '3.8'
 services:
   mongo1:
     image: mongo:6
     container_name: mongo1
-    ports: ['27017:27017']
+    ports:
+      - "27017:27017"
     volumes:
       - ./data/mongo1:/data/db
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    networks:
+      - mongo-cluster
+
   mongo2:
     image: mongo:6
     container_name: mongo2
-    ports: ['27018:27017']
+    ports:
+      - "27018:27017"
     volumes:
       - ./data/mongo2:/data/db
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    networks:
+      - mongo-cluster
+
   mongo3:
     image: mongo:6
     container_name: mongo3
-    ports: ['27019:27017']
+    ports:
+      - "27019:27017"
     volumes:
       - ./data/mongo3:/data/db
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    networks:
+      - mongo-cluster
+
+  replica-init:
+    image: mongo:6
+    container_name: replica-init
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+    volumes:
+      - ./init-replica.sh:/init-replica.sh:ro
+    entrypoint: ["/bin/bash","/init-replica.sh"]
+    networks:
+      - mongo-cluster
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: node-api
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+      - replica-init
+    environment:
+      - MONGODB_URI=mongodb://mongo1:27017,mongo2:27017,mongo3:27017/node-balancer?replicaSet=rs0&retryWrites=true&w=majority
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    networks:
+      - mongo-cluster
+
+networks:
+  mongo-cluster:
+    driver: bridge

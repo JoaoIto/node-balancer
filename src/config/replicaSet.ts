@@ -1,12 +1,7 @@
 import mongoose from 'mongoose';
 
-const uri = 'mongodb://mongo1:27017,mongo2:27017,mongo3:27017/mydb?replicaSet=rs0&retryWrites=true&w=majority';
+const uri = process.env.MONGO_URI || 'mongodb://192.168.0.70:27017,192.168.0.70:27018,192.168.0.70:27019/node-balancer?replicaSet=rs0&retryWrites=true&w=majority';
 
-mongoose.connect(uri, {
-    // opções recomendadas
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000,
-    // se você usa TLS/usuario, adicione authSource, tls=true etc.
-}).then(() => console.log('Mongo conectado (replica set)'))
-    .catch(err => console.error('Erro conexão mongo:', err));
+mongoose.connect(uri)
+    .then(() => console.log('✅ Mongo conectado (replica set local)'))
+    .catch(err => console.error('❌ Erro conexão mongo:', err));
