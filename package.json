@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "ops:demo": "ts-node src/scripts/demo_failover.ts"
   },
   "keywords": [],
   "author": "",
