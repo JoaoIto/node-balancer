@@ -1,13 +1,16 @@
+
 import { spawn, execSync } from 'child_process';
 import http from 'http';
+import { MongoClient } from 'mongodb';
 
 // Configuration
 const API_URL = 'http://localhost:3000/api/users';
-const CHECK_INTERVAL_MS = 1000;
-const CHAOS_DELAY_MS = 5000; // Wait 10s before stopping node
-const RECOVERY_DELAY_MS = 10000; // Wait 20s before restarting node
+const NODES = [
+    { name: 'mongo1', uri: 'mongodb://localhost:27017/node-balancer' },
+    { name: 'mongo2', uri: 'mongodb://localhost:27018/node-balancer' },
+    { name: 'mongo3', uri: 'mongodb://localhost:27019/node-balancer' }
+];
 
-// Colors for terminal output
 const colors = {
     reset: "\x1b[0m",
     red: "\x1b[31m",
@@ -16,82 +19,139 @@ const colors = {
     blue: "\x1b[34m",
     magenta: "\x1b[35m",
     cyan: "\x1b[36m",
+    gray: "\x1b[90m",
 };
 
 function log(prefix: string, msg: string, color: string = colors.reset) {
     const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
-    console.log(`${colors.reset}[${timestamp}] ${color}${prefix}${colors.reset} ${msg}`);
+    console.log(`${colors.gray}[${timestamp}]${colors.reset} ${color}${prefix.padEnd(10)}${colors.reset} ${msg}`);
+}
+
+async function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getPrimary() {
+    for (const node of NODES) {
+        const client = new MongoClient(node.uri, { serverSelectionTimeoutMS: 1000, directConnection: true });
+        try {
+            await client.connect();
+            const hello = await client.db('admin').command({ hello: 1 });
+            await client.close();
+            if (hello.isWritablePrimary) return node.name;
+        } catch (e) { }
+    }
+    return null;
+}
+
+async function checkTopology() {
+    const statuses = await Promise.all(NODES.map(async (node) => {
+        const client = new MongoClient(node.uri, { serverSelectionTimeoutMS: 500, directConnection: true });
+        try {
+            await client.connect();
+            const db = client.db('node-balancer');
+            const hello = await db.command({ hello: 1 });
+            const count = await db.collection('users').countDocuments();
+            await client.close();
+
+            const state = hello.isWritablePrimary ? 'PRIMARY' : 'SECONDARY';
+            const color = hello.isWritablePrimary ? colors.green : colors.blue;
+            return `${node.name}: ${color}${state}${colors.reset} (${count})`;
+        } catch (e) {
+            return `${node.name}: ${colors.red}DOWN${colors.reset}`;
+        }
+    }));
+    log('CLUSTER', statuses.join(' | '), colors.magenta);
+}
+
+async function request(method: 'GET' | 'POST') {
+    return new Promise<void>((resolve) => {
+        const start = Date.now();
+        const data = method === 'POST' ? JSON.stringify({
+            name: `User ${Date.now()}`,
+            email: `user${Date.now()}@test.com`,
+            password: '123'
+        }) : undefined;
+
+        const req = http.request(API_URL, {
+            method,
+            headers: method === 'POST' ? { 'Content-Type': 'application/json', 'Content-Length': data?.length } : {}
+        }, (res) => {
+            const duration = Date.now() - start;
+            const color = res.statusCode && res.statusCode < 300 ? colors.green : colors.red;
+            log('CLIENT', `${method} ${res.statusCode} - ${duration}ms`, color);
+            resolve();
+        });
+
+        req.on('error', (e) => {
+            log('CLIENT', `${method} ERROR: ${e.message}`, colors.red);
+            resolve();
+        });
+
+        if (data) req.write(data);
+        req.end();
+    });
+}
+
+async function runBatch() {
+    log('TEST', 'Running Batch: 2 POST + 1 GET', colors.cyan);
+    await request('POST');
+    await request('POST');
+    await request('GET');
+    await checkTopology();
 }
 
 async function startDemo() {
     console.clear();
-    log('DEMO', '🚀 Starting NodeBalancer Failover Demo', colors.cyan);
+    log('DEMO', '🚀 Starting Succinct Failover Demo', colors.cyan);
 
-    // 1. Ensure Stack is Up
-    log('SETUP', 'Ensuring docker-compose stack is up...', colors.blue);
-    try {
-        execSync('docker-compose up -d', { stdio: 'ignore' });
-    } catch (e) {
-        log('ERROR', 'Failed to start docker-compose', colors.red);
-        process.exit(1);
+    // 1. Ensure Stack
+    try { execSync('docker-compose up -d', { stdio: 'ignore' }); } catch (e) { }
+
+    // 2. Stream Logs
+    const dockerLogs = spawn('docker', ['logs', '-f', 'node-api']);
+    dockerLogs.stdout.on('data', (d) => {
+        d.toString().split('\n').forEach((l: string) => {
+            if (l.trim()) console.log(`${colors.gray}[API]      ${l.trim()}${colors.reset}`);
+        });
+    });
+
+    // 3. Initial State
+    await sleep(2000);
+    await checkTopology();
+
+    // 4. Phase 1: Healthy
+    await runBatch();
+
+    // 5. Chaos: Stop Primary
+    const primary = await getPrimary();
+    if (primary) {
+        log('CHAOS', `💥 Stopping PRIMARY: ${primary}`, colors.red);
+        execSync(`docker stop ${primary}`);
+    } else {
+        log('CHAOS', 'Could not find primary!', colors.red);
     }
 
-    // 2. Stream API Logs
-    log('LOGS', 'Streaming API logs...', colors.magenta);
-    const dockerLogs = spawn('docker', ['logs', '-f', 'node-api']);
+    // 6. Phase 2: Failover
+    await sleep(2000); // Give a moment for election
+    await runBatch();
 
-    dockerLogs.stdout.on('data', (data) => {
-        const lines = data.toString().split('\n');
-        lines.forEach((line: string) => {
-            if (line.trim()) console.log(`${colors.magenta}[API]${colors.reset} ${line.trim()}`);
-        });
-    });
+    // 7. Wait 5s
+    log('WAIT', 'Waiting 5 seconds...', colors.yellow);
+    await sleep(5000);
 
-    dockerLogs.stderr.on('data', (data) => {
-        const lines = data.toString().split('\n');
-        lines.forEach((line: string) => {
-            if (line.trim()) console.log(`${colors.red}[API-ERR]${colors.reset} ${line.trim()}`);
-        });
-    });
+    // 8. Recovery
+    if (primary) {
+        log('CHAOS', `♻️  Restarting ${primary}`, colors.green);
+        execSync(`docker start ${primary}`);
+    }
 
-    // 3. Start Traffic Loop
-    log('CLIENT', 'Starting traffic loop...', colors.green);
-    setInterval(() => {
-        const start = Date.now();
-        const req = http.get(API_URL, (res) => {
-            const duration = Date.now() - start;
-            const statusColor = res.statusCode === 200 ? colors.green : colors.red;
-            log('CLIENT', `${statusColor}${res.statusCode} OK${colors.reset} - ${duration}ms`, statusColor);
-        });
+    // 9. Phase 3: Recovery
+    await sleep(5000); // Wait for rejoin
+    await runBatch();
 
-        req.on('error', (e) => {
-            const duration = Date.now() - start;
-            log('CLIENT', `❌ ERROR: ${e.message} - ${duration}ms`, colors.red);
-        });
-    }, CHECK_INTERVAL_MS);
-
-    // 4. Chaos Scenario
-    setTimeout(() => {
-        log('CHAOS', '💥 STOPPING PRIMARY NODE (mongo1)...', colors.red);
-        try {
-            execSync('docker stop mongo1');
-            log('CHAOS', '✅ mongo1 stopped. Watch for failover!', colors.yellow);
-        } catch (e) {
-            log('CHAOS', 'Failed to stop mongo1', colors.red);
-        }
-
-        // 5. Recovery
-        setTimeout(() => {
-            log('CHAOS', '♻️  RESTARTING PRIMARY NODE (mongo1)...', colors.green);
-            try {
-                execSync('docker start mongo1');
-                log('CHAOS', '✅ mongo1 started. It should rejoin as Secondary.', colors.cyan);
-            } catch (e) {
-                log('CHAOS', 'Failed to start mongo1', colors.red);
-            }
-        }, RECOVERY_DELAY_MS);
-
-    }, CHAOS_DELAY_MS);
+    log('DEMO', '✅ Demo Completed', colors.cyan);
+    process.exit(0);
 }
 
 startDemo();
