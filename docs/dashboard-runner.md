@@ -36,7 +36,7 @@ O painel é dividido em 4 áreas:
 3.  **Execution Logs** (Baixo Esquerda): Histórico de ações.
 4.  **Actions** (Baixo Direita): Menu de comandos.
 
-![alt text](image.png)
+![Dashboard preview](https://raw.githubusercontent.com/JoaoIto/node-balancer/refs/heads/main/docs/images/dashboard-preview.png)
 
 ---
 **Nota**: Para sair, pressione `q`, `Esc` ou `Ctrl+C`.
