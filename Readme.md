@@ -81,12 +81,26 @@ npm run ops:demo
 
 ---
 
+## Visual Dashboard (Control Center)
+
+Para uma experiência visual e interativa, utilize o nosso Dashboard via Terminal (TUI). Ele permite monitorar a topologia do cluster, gráficos de latência e controlar os nós (Stop/Start) manualmente.
+
+```bash
+npm run dashboard
+```
+
+![Dashboard](https://raw.githubusercontent.com/JoaoIto/node-balancer/main/docs/images/dashboard-preview.png)
+*(Exemplo visual do painel)*
+
+---
+
 ## Documentação Detalhada
 
 Para mais detalhes, consulte os guias na pasta `docs/`:
 
--   📄 **[Guia de Testes e Execução (Demo Runner)](docs/demo-runner.md)**: Passo a passo detalhado de como rodar os testes manuais e automatizados, com exemplos de logs.
--   🛠️ **[Documentação dos Scripts](docs/scripts.md)**: Explicação técnica de como os scripts de automação (`src/scripts/`) funcionam.
+-   🖥️ **[Guia do Dashboard (Visual Runner)](docs/dashboard-runner.md)**: Manual completo do painel interativo.
+-   📄 **[Guia de Testes e Execução (Demo Runner)](docs/demo-runner.md)**: Passo a passo detalhado de como rodar os testes manuais e automatizados.
+-   🛠️ **[Documentação dos Scripts](docs/scripts.md)**: Explicação técnica de como os scripts de automação funcionam.
 
 ---
 
