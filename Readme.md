@@ -40,7 +40,7 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 1.  **Clone o repositório e entre na pasta:**
     ```bash
-    git clone <repo-url>
+    git clone https://github.com/JoaoIto/node-balancer.git
     cd NodeBalancer
     ```
 
