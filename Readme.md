@@ -6,15 +6,16 @@ O Node Balancer é uma API escalável construída utilizando Node.js, MongoDB co
 
 ## Arquitetura - Diagrama ilustrativo
 
-![img.png](https://raw.githubusercontent.com/JoaoIto/node-balancer/refs/heads/main/docs/images/diagramEscale.png)
+![img.png](docs/images/diagramEscale.png)
 
 ## Sumário
 
 1.  [Tecnologias](#tecnologias)
 2.  [Como Rodar o Projeto](#como-rodar-o-projeto)
-3.  [Testes e Automação (Chaos Testing)](#testes-e-automação-chaos-testing)
-4.  [Documentação Detalhada](#documentação-detalhada)
-5.  [Configuração Manual (Referência)](#configuração-manual-referência)
+3.  [Visual Dashboard (Painel de Controle)](#visual-dashboard-painel-de-controle)
+4.  [Testes e Automação (Chaos Testing)](#testes-e-automação-chaos-testing)
+5.  [Documentação Detalhada](#documentação-detalhada)
+6.  [Configuração Manual (Referência)](#configuração-manual-referência)
 
 ---
 
@@ -60,11 +61,56 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 ---
 
+## Visual Dashboard (Painel de Controle)
+
+Para uma experiência visual e interativa, utilize o nosso Dashboard via Terminal (TUI). Ele permite monitorar a topologia do cluster, gráficos de latência e controlar os nós (Stop/Start) manualmente.
+
+### Como Rodar o Dashboard
+
+```bash
+npm run dashboard
+```
+
+### O que você verá
+
+![Dashboard](docs/images/dashboard.png)
+
+O painel exibe:
+-   **Topologia**: Quem é o nó `PRIMARY` (Verde) e quem são os `SECONDARY` (Azul).
+-   **Latência**: Gráfico em tempo real do tempo de resposta da API.
+-   **Logs**: Histórico de ações e testes.
+
+### Exemplo de Resposta da API (JSON)
+
+Ao realizar testes de carga ou criar usuários via dashboard, a API retornará respostas como:
+
+**Sucesso (201 Created):**
+```json
+{
+  "message": "Usuário criado com sucesso",
+  "data": {
+    "name": "User 1732500000000",
+    "email": "user1732500000000@test.com",
+    "_id": "6560f...",
+    "createdAt": "2025-11-24T23:00:00.000Z"
+  }
+}
+```
+
+**Erro (Se o banco estiver caindo/failover - 500/Timeout):**
+```json
+{
+  "error": "Database connection failed"
+}
+```
+
+---
+
 ## Testes e Automação (Chaos Testing)
 
-Implementamos scripts automatizados para testar a resiliência do sistema. O principal teste é o **Demo de Failover**, que simula a queda do nó primário do banco de dados enquanto a API está recebendo tráfego.
+Se preferir rodar apenas o script de teste sem o dashboard visual:
 
-### Executando o Demo
+### Executando o Demo Automatizado
 
 ```bash
 npm run ops:demo
@@ -72,25 +118,12 @@ npm run ops:demo
 
 *(Se estiver no Windows/PowerShell e tiver problemas, use: `cmd /c "npm run ops:demo"`)*
 
-**O que esperar:**
-1.  O script verificará a topologia do cluster (quem é Primary/Secondary).
-2.  Enviará requisições de teste (POST e GET).
-3.  **Derrubará automaticamente o nó Primary**.
-4.  Continuará enviando requisições para provar que a API não parou (Failover).
-5.  Reiniciará o nó e verificará a recuperação.
-
----
-
-## Visual Dashboard (Control Center)
-
-Para uma experiência visual e interativa, utilize o nosso Dashboard via Terminal (TUI). Ele permite monitorar a topologia do cluster, gráficos de latência e controlar os nós (Stop/Start) manualmente.
-
-```bash
-npm run dashboard
-```
-
-![Dashboard](https://raw.githubusercontent.com/JoaoIto/node-balancer/main/docs/images/dashboard-preview.png)
-*(Exemplo visual do painel)*
+**O que este script faz:**
+1.  Verifica a topologia do cluster.
+2.  Envia requisições de teste (POST e GET).
+3.  **Derruba automaticamente o nó Primary**.
+4.  Prova que a API continua funcionando (Failover).
+5.  Reinicia o nó e verifica a recuperação.
 
 ---
 
