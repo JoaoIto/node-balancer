@@ -73,7 +73,7 @@ npm run dashboard
 
 ### O que você verá
 
-![Dashboard](docs/images/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/JoaoIto/node-balancer/refs/heads/main/docs/images/dashboard-preview.png)
 
 O painel exibe:
 -   **Topologia**: Quem é o nó `PRIMARY` (Verde) e quem são os `SECONDARY` (Azul).
