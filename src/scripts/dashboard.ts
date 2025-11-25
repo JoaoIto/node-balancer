@@ -267,6 +267,38 @@ controls.on('select', async (item: blessed.Widgets.BoxElement, index: number) =>
     }
 });
 
+import { io } from 'socket.io-client';
+
+// ... (imports)
+
+// WebSocket Connection
+const socket = io(API_URL.replace('/api/users', '').replace('/api', '')); // Base URL
+
+socket.on('connect', () => {
+    log('✅ WebSocket Connected to API');
+});
+
+socket.on('disconnect', () => {
+    log('❌ WebSocket Disconnected');
+});
+
+socket.on('log', (data: any) => {
+    // Format log event
+    let msg = '';
+    if (data.type === 'promote') msg = `👑 NEW PRIMARY: ${data.payload.node}`;
+    else if (data.type === 'no-writable') msg = `🚨 CRITICAL: NO WRITABLE NODES`;
+    else if (data.op) msg = `${data.op.toUpperCase()} ${data.collection} (${data.durationMs}ms) ${data.success ? '✅' : '❌'}`;
+    else msg = JSON.stringify(data);
+
+    log(`[WS] ${msg}`);
+});
+
+socket.on('topology-change', (data: any) => {
+    log(`[WS] Topology Change Detected`);
+    // Optionally trigger immediate topology refresh
+    updateTopology();
+});
+
 // Loops
 setInterval(updateTopology, 2000);
 

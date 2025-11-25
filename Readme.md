@@ -5,14 +5,47 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20.x-green)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 
-## 🚀 Quick Start (Dashboard CLI)
+## 🚀 QuickStart (Plug & Play)
 
-Se você quer apenas rodar o painel de controle visualmente para testar qualquer API:
+Escolha como você quer usar o projeto:
 
-```bash
-npm install -g replica-failover-mongodb-ts
-node-balancer-dashboard
-```
+### Opção A: Via NPM (Apenas Dashboard)
+Ideal se você já tem um cluster MongoDB e quer apenas visualizar/controlar.
+
+1.  **Instale a ferramenta globalmente:**
+    ```bash
+    npm install -g replica-failover-mongodb-ts
+    ```
+
+2.  **Rode apontando para o seu banco:**
+    ```bash
+    node-balancer-dashboard \
+      --api-url http://localhost:3000/api/users \
+      --nodes mongodb://localhost:27017,mongodb://localhost:27018
+    ```
+    *(Substitua as URLs pelas do seu ambiente)*
+
+### Opção B: Via Git (Ambiente Completo)
+Ideal para ver a mágica acontecer do zero (cria API + Banco + Réplicas).
+
+1.  **Clone e Instale:**
+    ```bash
+    git clone https://github.com/JoaoIto/node-balancer.git
+    cd node-balancer
+    npm install
+    ```
+
+2.  **Suba o Ambiente (Docker):**
+    ```bash
+    docker-compose up -d --build
+    ```
+    *Aguarde ~30s para o cluster configurar.*
+
+3.  **Rode o Dashboard:**
+    ```bash
+    npm run dashboard
+    ```
+    *Pronto! Selecione "RUN CHAOS DEMO" e divirta-se.*
 
 ---
 
@@ -32,8 +65,9 @@ O Node Balancer é uma API escalável construída utilizando Node.js, MongoDB co
 4.  [Visual Dashboard (Painel de Controle)](#visual-dashboard-painel-de-controle)
 5.  [Uso Avançado do Dashboard (CLI)](#uso-avançado-do-dashboard-cli)
 6.  [Testes e Automação (Chaos Testing)](#testes-e-automação-chaos-testing)
-7.  [Documentação Detalhada](#documentação-detalhada)
-8.  [Configuração Manual (Referência)](#configuração-manual-referência)
+7.  [Observabilidade (v3.0)](#observabilidade-v30)
+8.  [Documentação Detalhada](#documentação-detalhada)
+9.  [Configuração Manual (Referência)](#configuração-manual-referência)
 
 ---
 
@@ -201,6 +235,29 @@ npm run ops:demo
 
 ---
 
+## Observabilidade (v3.0)
+
+A versão 3.0 introduz recursos avançados de monitoramento para produção:
+
+### 🔔 Webhooks (Rápido)
+Receba alertas no seu Slack ou Discord. Basta passar a URL ao iniciar:
+
+```typescript
+const db = new ConnectionManager({
+    nodes: [...],
+    webhookUrl: 'https://discord.com/api/webhooks/...' // Sua URL aqui
+});
+```
+*O sistema fará um POST automático com JSON sempre que houver um failover.*
+
+### 📊 Métricas e Real-time
+-   **Prometheus**: Acesse `http://localhost:3000/metrics` para ver dados de latência e conexão.
+-   **WebSocket**: Conecte via Socket.io para receber logs em tempo real.
+
+👉 **[Leia o guia completo de Observabilidade (Português)](docs/observability.md)**
+
+---
+
 ## Documentação Detalhada
 
 Para mais detalhes, consulte os guias na pasta `docs/`:
@@ -208,6 +265,7 @@ Para mais detalhes, consulte os guias na pasta `docs/`:
 -   🖥️ **[Guia do Dashboard (Visual Runner)](docs/dashboard-runner.md)**: Manual completo do painel interativo.
 -   📄 **[Guia de Testes e Execução (Demo Runner)](docs/demo-runner.md)**: Passo a passo detalhado de como rodar os testes manuais e automatizados.
 -   🛠️ **[Documentação dos Scripts](docs/scripts.md)**: Explicação técnica de como os scripts de automação funcionam.
+-   📡 **[Observabilidade e Alertas](docs/observability.md)**: Guia de configuração de Webhooks, Métricas e WebSocket.
 
 ---
 

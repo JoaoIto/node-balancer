@@ -1,6 +1,9 @@
 
 import { MongoClient, Db } from 'mongodb';
+import axios from 'axios';
 import { logger } from '../middlewares/logger';
+import { getIO } from './websocket';
+import { connectionStatus, failoverCount, operationDuration } from './metrics';
 
 type NodeInfo = { uri: string; name: string };
 
@@ -9,6 +12,7 @@ interface ConnectionManagerOptions {
     nodes?: string[];
     dbName?: string;
     healthCheckIntervalMs?: number;
+    webhookUrl?: string;
 }
 
 export class ConnectionManager {
@@ -19,12 +23,14 @@ export class ConnectionManager {
     private dbName: string;
     private healthInterval?: NodeJS.Timeout;
     private healthCheckIntervalMs: number;
+    private webhookUrl?: string;
 
     constructor(opts: ConnectionManagerOptions) {
         this.replicaUri = opts.replicaUri;
         this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
         this.dbName = opts.dbName || 'node-balancer';
         this.healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 5000;
+        this.webhookUrl = opts.webhookUrl;
     }
 
     public async init(): Promise<void> {
@@ -80,12 +86,15 @@ export class ConnectionManager {
         // register monitoring events on the client
         client.on('topologyDescriptionChanged', (td) => {
             logger.info(`topologyDescriptionChanged: ${JSON.stringify(this.summarizeTopology(td))}`);
-            this.recordEvent('topologyDescriptionChanged', { td: this.summarizeTopology(td) }).catch(() => { });
+            const summary = this.summarizeTopology(td);
+            this.recordEvent('topologyDescriptionChanged', { td: summary }).catch(() => { });
+            getIO()?.emit('topology-change', summary);
         });
 
         client.on('serverHeartbeatFailed', (event) => {
             logger.warn(`serverHeartbeatFailed: ${JSON.stringify(event)}`);
             this.recordEvent('serverHeartbeatFailed', { event }).catch(() => { });
+            this.sendAlert('serverHeartbeatFailed', event).catch(() => { });
         });
 
         client.on('serverHeartbeatSucceeded', (event) => {
@@ -98,6 +107,7 @@ export class ConnectionManager {
         });
 
         logger.info('Primary client attached.');
+        connectionStatus.set(1);
     }
 
     private summarizeTopology(td: any) {
@@ -133,15 +143,29 @@ export class ConnectionManager {
 
     private async recordEvent(type: string, payload: any) {
         try {
-            if (!this.primaryDb) return;
-            await this.primaryDb.collection('logs').insertOne({
+            const event = {
                 ts: new Date(),
                 level: 'event',
                 type,
                 payload,
-            });
+            };
+            getIO()?.emit('log', event);
+
+            if (!this.primaryDb) return;
+            await this.primaryDb.collection('logs').insertOne(event);
         } catch (err) {
             logger.warn('recordEvent failed: ' + (err as Error).message);
+        }
+    }
+
+    private async sendAlert(event: string, details: any) {
+        if (!this.webhookUrl) return;
+        try {
+            await axios.post(this.webhookUrl, {
+                text: `⚠️ **NodeBalancer Alert**\n**Event**: ${event}\n**Details**: \`\`\`${JSON.stringify(details, null, 2)}\`\`\``
+            });
+        } catch (err) {
+            logger.warn(`Failed to send webhook alert: ${(err as Error).message}`);
         }
     }
 
@@ -162,6 +186,7 @@ export class ConnectionManager {
             } catch { }
             this.primaryClient = null;
             this.primaryDb = null;
+            connectionStatus.set(0);
         }
 
         // attempt to find a writable node among nodes (directConnection)
@@ -174,6 +199,8 @@ export class ConnectionManager {
                     logger.info(`Health-check: promoted ${n.uri} to primary connection`);
                     this.attachClient(c);
                     await this.recordEvent('promote', { node: n.uri });
+                    await this.sendAlert('promote', { node: n.uri, message: 'Promoted new primary connection' });
+                    failoverCount.inc();
                     return;
                 } else {
                     await c.close();
@@ -186,6 +213,7 @@ export class ConnectionManager {
         // no writable found
         logger.error('Health-check: no writable nodes found.');
         await this.recordEvent('no-writable', {});
+        await this.sendAlert('no-writable', { message: 'CRITICAL: No writable nodes found in cluster!' });
     }
 
     public getDb(): Db | null {
@@ -208,6 +236,7 @@ export class ConnectionManager {
                 meta,
                 durationMs: took,
             });
+            operationDuration.observe({ operation: 'read', collection: collectionName, success: 'true' }, took / 1000);
             return res;
         } catch (err) {
             const took = Date.now() - start;
@@ -220,6 +249,7 @@ export class ConnectionManager {
                 meta,
                 durationMs: took,
             });
+            operationDuration.observe({ operation: 'read', collection: collectionName, success: 'false' }, took / 1000);
             throw err;
         }
     }
@@ -239,6 +269,7 @@ export class ConnectionManager {
                 meta,
                 durationMs: took,
             });
+            operationDuration.observe({ operation: 'write', collection: collectionName, success: 'true' }, took / 1000);
             return res;
         } catch (err) {
             const took = Date.now() - start;
@@ -251,12 +282,14 @@ export class ConnectionManager {
                 meta,
                 durationMs: took,
             });
+            operationDuration.observe({ operation: 'write', collection: collectionName, success: 'false' }, took / 1000);
             throw err;
         }
     }
 
     private async safeLog(doc: any) {
         try {
+            getIO()?.emit('log', doc);
             if (!this.primaryDb) {
                 logger.warn('safeLog: no primaryDb, skipping db log. Logging to console instead.');
                 logger.info(JSON.stringify(doc));

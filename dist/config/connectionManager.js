@@ -8,10 +8,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ConnectionManager = void 0;
 const mongodb_1 = require("mongodb");
+const axios_1 = __importDefault(require("axios"));
 const logger_1 = require("../middlewares/logger");
+const websocket_1 = require("./websocket");
+const metrics_1 = require("./metrics");
 class ConnectionManager {
     constructor(opts) {
         var _a;
@@ -22,6 +28,7 @@ class ConnectionManager {
         this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
         this.dbName = opts.dbName || 'node-balancer';
         this.healthCheckIntervalMs = (_a = opts.healthCheckIntervalMs) !== null && _a !== void 0 ? _a : 5000;
+        this.webhookUrl = opts.webhookUrl;
     }
     init() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -77,12 +84,16 @@ class ConnectionManager {
         this.primaryDb = client.db(this.dbName);
         // register monitoring events on the client
         client.on('topologyDescriptionChanged', (td) => {
+            var _a;
             logger_1.logger.info(`topologyDescriptionChanged: ${JSON.stringify(this.summarizeTopology(td))}`);
-            this.recordEvent('topologyDescriptionChanged', { td: this.summarizeTopology(td) }).catch(() => { });
+            const summary = this.summarizeTopology(td);
+            this.recordEvent('topologyDescriptionChanged', { td: summary }).catch(() => { });
+            (_a = (0, websocket_1.getIO)()) === null || _a === void 0 ? void 0 : _a.emit('topology-change', summary);
         });
         client.on('serverHeartbeatFailed', (event) => {
             logger_1.logger.warn(`serverHeartbeatFailed: ${JSON.stringify(event)}`);
             this.recordEvent('serverHeartbeatFailed', { event }).catch(() => { });
+            this.sendAlert('serverHeartbeatFailed', event).catch(() => { });
         });
         client.on('serverHeartbeatSucceeded', (event) => {
             logger_1.logger.debug(`serverHeartbeatSucceeded: ${JSON.stringify(event)}`);
@@ -92,6 +103,7 @@ class ConnectionManager {
             this.recordEvent('clientClose', {}).catch(() => { });
         });
         logger_1.logger.info('Primary client attached.');
+        metrics_1.connectionStatus.set(1);
     }
     summarizeTopology(td) {
         // gentle summary - driver topologyDescription shape may vary
@@ -130,18 +142,35 @@ class ConnectionManager {
     }
     recordEvent(type, payload) {
         return __awaiter(this, void 0, void 0, function* () {
+            var _a;
             try {
-                if (!this.primaryDb)
-                    return;
-                yield this.primaryDb.collection('logs').insertOne({
+                const event = {
                     ts: new Date(),
                     level: 'event',
                     type,
                     payload,
-                });
+                };
+                (_a = (0, websocket_1.getIO)()) === null || _a === void 0 ? void 0 : _a.emit('log', event);
+                if (!this.primaryDb)
+                    return;
+                yield this.primaryDb.collection('logs').insertOne(event);
             }
             catch (err) {
                 logger_1.logger.warn('recordEvent failed: ' + err.message);
+            }
+        });
+    }
+    sendAlert(event, details) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.webhookUrl)
+                return;
+            try {
+                yield axios_1.default.post(this.webhookUrl, {
+                    text: `⚠️ **NodeBalancer Alert**\n**Event**: ${event}\n**Details**: \`\`\`${JSON.stringify(details, null, 2)}\`\`\``
+                });
+            }
+            catch (err) {
+                logger_1.logger.warn(`Failed to send webhook alert: ${err.message}`);
             }
         });
     }
@@ -165,6 +194,7 @@ class ConnectionManager {
                 catch (_a) { }
                 this.primaryClient = null;
                 this.primaryDb = null;
+                metrics_1.connectionStatus.set(0);
             }
             // attempt to find a writable node among nodes (directConnection)
             for (const n of this.nodes) {
@@ -176,6 +206,8 @@ class ConnectionManager {
                         logger_1.logger.info(`Health-check: promoted ${n.uri} to primary connection`);
                         this.attachClient(c);
                         yield this.recordEvent('promote', { node: n.uri });
+                        yield this.sendAlert('promote', { node: n.uri, message: 'Promoted new primary connection' });
+                        metrics_1.failoverCount.inc();
                         return;
                     }
                     else {
@@ -189,6 +221,7 @@ class ConnectionManager {
             // no writable found
             logger_1.logger.error('Health-check: no writable nodes found.');
             yield this.recordEvent('no-writable', {});
+            yield this.sendAlert('no-writable', { message: 'CRITICAL: No writable nodes found in cluster!' });
         });
     }
     getDb() {
@@ -212,6 +245,7 @@ class ConnectionManager {
                     meta,
                     durationMs: took,
                 });
+                metrics_1.operationDuration.observe({ operation: 'read', collection: collectionName, success: 'true' }, took / 1000);
                 return res;
             }
             catch (err) {
@@ -225,6 +259,7 @@ class ConnectionManager {
                     meta,
                     durationMs: took,
                 });
+                metrics_1.operationDuration.observe({ operation: 'read', collection: collectionName, success: 'false' }, took / 1000);
                 throw err;
             }
         });
@@ -246,6 +281,7 @@ class ConnectionManager {
                     meta,
                     durationMs: took,
                 });
+                metrics_1.operationDuration.observe({ operation: 'write', collection: collectionName, success: 'true' }, took / 1000);
                 return res;
             }
             catch (err) {
@@ -259,13 +295,16 @@ class ConnectionManager {
                     meta,
                     durationMs: took,
                 });
+                metrics_1.operationDuration.observe({ operation: 'write', collection: collectionName, success: 'false' }, took / 1000);
                 throw err;
             }
         });
     }
     safeLog(doc) {
         return __awaiter(this, void 0, void 0, function* () {
+            var _a;
             try {
+                (_a = (0, websocket_1.getIO)()) === null || _a === void 0 ? void 0 : _a.emit('log', doc);
                 if (!this.primaryDb) {
                     logger_1.logger.warn('safeLog: no primaryDb, skipping db log. Logging to console instead.');
                     logger_1.logger.info(JSON.stringify(doc));
