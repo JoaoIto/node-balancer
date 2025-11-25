@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
@@ -17,13 +18,21 @@ const blessed_contrib_1 = __importDefault(require("blessed-contrib"));
 const mongodb_1 = require("mongodb");
 const http_1 = __importDefault(require("http"));
 const child_process_1 = require("child_process");
-// Configuration
-const API_URL = 'http://localhost:3000/api/users';
-const NODES = [
-    { name: 'mongo1', uri: 'mongodb://localhost:27017/node-balancer' },
-    { name: 'mongo2', uri: 'mongodb://localhost:27018/node-balancer' },
-    { name: 'mongo3', uri: 'mongodb://localhost:27019/node-balancer' }
-];
+// Parse Args
+const args = process.argv.slice(2);
+function getArg(flag, def) {
+    const idx = args.indexOf(flag);
+    return idx !== -1 && args[idx + 1] ? args[idx + 1] : def;
+}
+const API_URL = getArg('--api-url', 'http://localhost:3000/api/users');
+const NODES_ARG = getArg('--nodes', 'mongodb://localhost:27017/node-balancer,mongodb://localhost:27018/node-balancer,mongodb://localhost:27019/node-balancer');
+const DOCKER_CONTAINERS_ARG = getArg('--docker-containers', 'mongo1,mongo2,mongo3');
+const NO_DOCKER = args.includes('--no-docker');
+const NODES = NODES_ARG.split(',').map((uri, i) => ({
+    name: `node${i + 1}`,
+    uri: uri.trim()
+}));
+const DOCKER_NODES = DOCKER_CONTAINERS_ARG.split(',').map(n => n.trim());
 // Screen Setup
 const screen = blessed_1.default.screen({
     smartCSR: true,
@@ -64,11 +73,11 @@ const controls = grid.set(6, 8, 6, 4, blessed_1.default.list, {
     items: [
         'RUN CHAOS DEMO (Auto)',
         'SEND BATCH (2 POST + 1 GET)',
-        'STOP PRIMARY',
-        'START MONGO1',
-        'START MONGO2',
-        'START MONGO3',
-        'START STACK',
+        ...(NO_DOCKER ? [] : [
+            'STOP PRIMARY',
+            ...DOCKER_NODES.map(n => `START ${n.toUpperCase()}`),
+            'START STACK'
+        ]),
         'EXIT'
     ]
 });
@@ -155,7 +164,7 @@ function updateTopology() {
             try {
                 const client = new mongodb_1.MongoClient(node.uri, { serverSelectionTimeoutMS: 500, directConnection: true });
                 yield client.connect();
-                const db = client.db('node-balancer');
+                const db = client.db('node-balancer'); // Assuming DB name is consistent or part of URI, but here hardcoded for now or could be arg
                 const hello = yield db.command({ hello: 1 });
                 count = (yield db.collection('users').countDocuments()).toString();
                 yield client.close();
@@ -186,34 +195,43 @@ function runChaosDemo() {
         // Phase 1
         log('Phase 1: Healthy State');
         yield runBatch();
-        // Chaos
-        const primary = yield getPrimary();
-        if (primary) {
-            log(`💥 Stopping PRIMARY: ${primary}`);
-            try {
-                (0, child_process_1.execSync)(`docker stop ${primary}`);
-            }
-            catch (e) {
-                log('Error stopping node');
-            }
+        if (NO_DOCKER) {
+            log('Skipping Chaos (No Docker Mode)');
         }
         else {
-            log('No Primary found to stop!');
-        }
-        // Phase 2
-        log('Phase 2: Failover State');
-        yield sleep(2000);
-        yield runBatch();
-        // Recovery
-        log('Waiting 5s before recovery...');
-        yield sleep(5000);
-        if (primary) {
-            log(`♻️  Restarting ${primary}`);
-            try {
-                (0, child_process_1.execSync)(`docker start ${primary}`);
+            // Chaos
+            const primaryName = yield getPrimary(); // returns node1, node2...
+            // We need to map node name to container name if they differ, but here we assume index matching or we need smarter logic
+            // For simplicity in this generic version, let's try to find the container name based on index
+            const primaryIndex = NODES.findIndex(n => n.name === primaryName);
+            const containerName = primaryIndex !== -1 ? DOCKER_NODES[primaryIndex] : null;
+            if (containerName) {
+                log(`💥 Stopping PRIMARY: ${containerName}`);
+                try {
+                    (0, child_process_1.execSync)(`docker stop ${containerName}`);
+                }
+                catch (e) {
+                    log('Error stopping node');
+                }
             }
-            catch (e) {
-                log('Error starting node');
+            else {
+                log('No Primary found to stop!');
+            }
+            // Phase 2
+            log('Phase 2: Failover State');
+            yield sleep(2000);
+            yield runBatch();
+            // Recovery
+            log('Waiting 5s before recovery...');
+            yield sleep(5000);
+            if (containerName) {
+                log(`♻️  Restarting ${containerName}`);
+                try {
+                    (0, child_process_1.execSync)(`docker start ${containerName}`);
+                }
+                catch (e) {
+                    log('Error starting node');
+                }
             }
         }
         // Phase 3
@@ -233,11 +251,15 @@ controls.on('select', (item, index) => __awaiter(void 0, void 0, void 0, functio
         runBatch();
     }
     else if (cmd.includes('STOP PRIMARY')) {
-        const p = yield getPrimary();
-        if (p) {
-            log(`Stopping ${p}...`);
+        if (NO_DOCKER)
+            return log('Docker disabled.');
+        const pName = yield getPrimary();
+        const pIdx = NODES.findIndex(n => n.name === pName);
+        const container = pIdx !== -1 ? DOCKER_NODES[pIdx] : null;
+        if (container) {
+            log(`Stopping ${container}...`);
             try {
-                (0, child_process_1.execSync)(`docker stop ${p}`);
+                (0, child_process_1.execSync)(`docker stop ${container}`);
                 log('Stopped.');
             }
             catch (e) {
@@ -248,11 +270,15 @@ controls.on('select', (item, index) => __awaiter(void 0, void 0, void 0, functio
             log('No Primary found.');
         }
     }
-    else if (cmd.includes('START MONGO')) {
-        const node = cmd.split(' ')[1].toLowerCase();
-        log(`Starting ${node}...`);
+    else if (cmd.includes('START MONGO') || cmd.includes('START NODE')) { // Generic match
+        if (NO_DOCKER)
+            return log('Docker disabled.');
+        // Extract container name from string "START MONGO1"
+        const parts = cmd.split(' ');
+        const container = parts[1].toLowerCase(); // mongo1
+        log(`Starting ${container}...`);
         try {
-            (0, child_process_1.execSync)(`docker start ${node}`);
+            (0, child_process_1.execSync)(`docker start ${container}`);
             log('Started.');
         }
         catch (e) {
@@ -260,6 +286,8 @@ controls.on('select', (item, index) => __awaiter(void 0, void 0, void 0, functio
         }
     }
     else if (cmd.includes('START STACK')) {
+        if (NO_DOCKER)
+            return log('Docker disabled.');
         log('Starting stack...');
         try {
             (0, child_process_1.execSync)('docker-compose up -d');
@@ -278,6 +306,9 @@ setInterval(updateTopology, 2000);
 // Init
 controls.focus();
 log('Control Center Ready.');
+if (NO_DOCKER)
+    log('Docker Control: DISABLED');
+log(`API: ${API_URL}`);
 updateTopology();
 screen.render();
 // Exit

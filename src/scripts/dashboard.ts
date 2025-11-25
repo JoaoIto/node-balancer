@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 
 import blessed from 'blessed';
 import contrib from 'blessed-contrib';
@@ -5,13 +6,24 @@ import { MongoClient } from 'mongodb';
 import http from 'http';
 import { execSync } from 'child_process';
 
-// Configuration
-const API_URL = 'http://localhost:3000/api/users';
-const NODES = [
-    { name: 'mongo1', uri: 'mongodb://localhost:27017/node-balancer' },
-    { name: 'mongo2', uri: 'mongodb://localhost:27018/node-balancer' },
-    { name: 'mongo3', uri: 'mongodb://localhost:27019/node-balancer' }
-];
+// Parse Args
+const args = process.argv.slice(2);
+function getArg(flag: string, def: string): string {
+    const idx = args.indexOf(flag);
+    return idx !== -1 && args[idx + 1] ? args[idx + 1] : def;
+}
+
+const API_URL = getArg('--api-url', 'http://localhost:3000/api/users');
+const NODES_ARG = getArg('--nodes', 'mongodb://localhost:27017/node-balancer,mongodb://localhost:27018/node-balancer,mongodb://localhost:27019/node-balancer');
+const DOCKER_CONTAINERS_ARG = getArg('--docker-containers', 'mongo1,mongo2,mongo3');
+const NO_DOCKER = args.includes('--no-docker');
+
+const NODES = NODES_ARG.split(',').map((uri, i) => ({
+    name: `node${i + 1}`,
+    uri: uri.trim()
+}));
+
+const DOCKER_NODES = DOCKER_CONTAINERS_ARG.split(',').map(n => n.trim());
 
 // Screen Setup
 const screen = blessed.screen({
@@ -58,11 +70,11 @@ const controls = grid.set(6, 8, 6, 4, blessed.list, {
     items: [
         'RUN CHAOS DEMO (Auto)',
         'SEND BATCH (2 POST + 1 GET)',
-        'STOP PRIMARY',
-        'START MONGO1',
-        'START MONGO2',
-        'START MONGO3',
-        'START STACK',
+        ...(NO_DOCKER ? [] : [
+            'STOP PRIMARY',
+            ...DOCKER_NODES.map(n => `START ${n.toUpperCase()}`),
+            'START STACK'
+        ]),
         'EXIT'
     ]
 });
@@ -150,7 +162,7 @@ async function updateTopology() {
         try {
             const client = new MongoClient(node.uri, { serverSelectionTimeoutMS: 500, directConnection: true });
             await client.connect();
-            const db = client.db('node-balancer');
+            const db = client.db('node-balancer'); // Assuming DB name is consistent or part of URI, but here hardcoded for now or could be arg
             const hello = await db.command({ hello: 1 });
             count = (await db.collection('users').countDocuments()).toString();
             await client.close();
@@ -181,26 +193,35 @@ async function runChaosDemo() {
     log('Phase 1: Healthy State');
     await runBatch();
 
-    // Chaos
-    const primary = await getPrimary();
-    if (primary) {
-        log(`💥 Stopping PRIMARY: ${primary}`);
-        try { execSync(`docker stop ${primary}`); } catch (e) { log('Error stopping node'); }
+    if (NO_DOCKER) {
+        log('Skipping Chaos (No Docker Mode)');
     } else {
-        log('No Primary found to stop!');
-    }
+        // Chaos
+        const primaryName = await getPrimary(); // returns node1, node2...
+        // We need to map node name to container name if they differ, but here we assume index matching or we need smarter logic
+        // For simplicity in this generic version, let's try to find the container name based on index
+        const primaryIndex = NODES.findIndex(n => n.name === primaryName);
+        const containerName = primaryIndex !== -1 ? DOCKER_NODES[primaryIndex] : null;
 
-    // Phase 2
-    log('Phase 2: Failover State');
-    await sleep(2000);
-    await runBatch();
+        if (containerName) {
+            log(`💥 Stopping PRIMARY: ${containerName}`);
+            try { execSync(`docker stop ${containerName}`); } catch (e) { log('Error stopping node'); }
+        } else {
+            log('No Primary found to stop!');
+        }
 
-    // Recovery
-    log('Waiting 5s before recovery...');
-    await sleep(5000);
-    if (primary) {
-        log(`♻️  Restarting ${primary}`);
-        try { execSync(`docker start ${primary}`); } catch (e) { log('Error starting node'); }
+        // Phase 2
+        log('Phase 2: Failover State');
+        await sleep(2000);
+        await runBatch();
+
+        // Recovery
+        log('Waiting 5s before recovery...');
+        await sleep(5000);
+        if (containerName) {
+            log(`♻️  Restarting ${containerName}`);
+            try { execSync(`docker start ${containerName}`); } catch (e) { log('Error starting node'); }
+        }
     }
 
     // Phase 3
@@ -219,18 +240,26 @@ controls.on('select', async (item: blessed.Widgets.BoxElement, index: number) =>
     } else if (cmd.includes('SEND BATCH')) {
         runBatch();
     } else if (cmd.includes('STOP PRIMARY')) {
-        const p = await getPrimary();
-        if (p) {
-            log(`Stopping ${p}...`);
-            try { execSync(`docker stop ${p}`); log('Stopped.'); } catch (e) { log('Error.'); }
+        if (NO_DOCKER) return log('Docker disabled.');
+        const pName = await getPrimary();
+        const pIdx = NODES.findIndex(n => n.name === pName);
+        const container = pIdx !== -1 ? DOCKER_NODES[pIdx] : null;
+
+        if (container) {
+            log(`Stopping ${container}...`);
+            try { execSync(`docker stop ${container}`); log('Stopped.'); } catch (e) { log('Error.'); }
         } else {
             log('No Primary found.');
         }
-    } else if (cmd.includes('START MONGO')) {
-        const node = cmd.split(' ')[1].toLowerCase();
-        log(`Starting ${node}...`);
-        try { execSync(`docker start ${node}`); log('Started.'); } catch (e) { log('Error.'); }
+    } else if (cmd.includes('START MONGO') || cmd.includes('START NODE')) { // Generic match
+        if (NO_DOCKER) return log('Docker disabled.');
+        // Extract container name from string "START MONGO1"
+        const parts = cmd.split(' ');
+        const container = parts[1].toLowerCase(); // mongo1
+        log(`Starting ${container}...`);
+        try { execSync(`docker start ${container}`); log('Started.'); } catch (e) { log('Error.'); }
     } else if (cmd.includes('START STACK')) {
+        if (NO_DOCKER) return log('Docker disabled.');
         log('Starting stack...');
         try { execSync('docker-compose up -d'); log('Stack up.'); } catch (e: any) { log(`Error: ${e.message.split('\n')[0]}`); }
     } else if (cmd.includes('EXIT')) {
@@ -244,6 +273,8 @@ setInterval(updateTopology, 2000);
 // Init
 controls.focus();
 log('Control Center Ready.');
+if (NO_DOCKER) log('Docker Control: DISABLED');
+log(`API: ${API_URL}`);
 updateTopology();
 screen.render();
 

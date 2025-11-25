@@ -7,7 +7,7 @@
 
 ## 🚀 Quick Start (Dashboard CLI)
 
-Se você quer apenas rodar o painel de controle visualmente:
+Se você quer apenas rodar o painel de controle visualmente para testar qualquer API:
 
 ```bash
 npm install -g replica-failover-mongodb-ts
@@ -27,11 +27,13 @@ O Node Balancer é uma API escalável construída utilizando Node.js, MongoDB co
 ## Sumário
 
 1.  [Tecnologias](#tecnologias)
-2.  [Como Rodar o Projeto](#como-rodar-o-projeto)
-3.  [Visual Dashboard (Painel de Controle)](#visual-dashboard-painel-de-controle)
-4.  [Testes e Automação (Chaos Testing)](#testes-e-automação-chaos-testing)
-5.  [Documentação Detalhada](#documentação-detalhada)
-6.  [Configuração Manual (Referência)](#configuração-manual-referência)
+2.  [Como Rodar o Projeto (Dev)](#como-rodar-o-projeto-dev)
+3.  [Uso como Biblioteca (Library)](#uso-como-biblioteca-library)
+4.  [Visual Dashboard (Painel de Controle)](#visual-dashboard-painel-de-controle)
+5.  [Uso Avançado do Dashboard (CLI)](#uso-avançado-do-dashboard-cli)
+6.  [Testes e Automação (Chaos Testing)](#testes-e-automação-chaos-testing)
+7.  [Documentação Detalhada](#documentação-detalhada)
+8.  [Configuração Manual (Referência)](#configuração-manual-referência)
 
 ---
 
@@ -47,7 +49,7 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 ---
 
-## Como Rodar o Projeto
+## Como Rodar o Projeto (Dev)
 
 ### Pré-requisitos
 -   Docker e Docker Compose instalados.
@@ -73,6 +75,33 @@ O Node Balancer utiliza as seguintes tecnologias:
 3.  **Verifique se tudo está rodando:**
     ```bash
     docker-compose ps
+    ```
+
+---
+
+## Uso como Biblioteca (Library)
+
+Você pode usar o gerenciador de conexões resiliente deste projeto em sua própria aplicação Node.js.
+
+1.  **Instale a lib:**
+    ```bash
+    npm install replica-failover-mongodb-ts
+    ```
+
+2.  **Importe e use:**
+    ```typescript
+    import { ConnectionManager } from 'replica-failover-mongodb-ts';
+
+    const db = new ConnectionManager({
+        nodes: [
+            'mongodb://mongo1:27017/mydb',
+            'mongodb://mongo2:27017/mydb'
+        ],
+        healthCheckIntervalMs: 5000
+    });
+
+    await db.init();
+    const myCollection = db.getDb().collection('users');
     ```
 
 ---
@@ -118,6 +147,35 @@ Ao realizar testes de carga ou criar usuários via dashboard, a API retornará r
 {
   "error": "Database connection failed"
 }
+```
+
+---
+
+## Uso Avançado do Dashboard (CLI)
+
+O dashboard pode ser configurado para monitorar **qualquer API** e **qualquer cluster MongoDB**, não apenas o deste projeto.
+
+```bash
+node-balancer-dashboard [opções]
+```
+
+### Opções Disponíveis
+
+| Flag | Descrição | Padrão |
+| :--- | :--- | :--- |
+| `--api-url` | URL da API para testar latência/requests | `http://localhost:3000/api/users` |
+| `--nodes` | Lista de URIs do MongoDB (separados por vírgula) | `mongodb://localhost:27017...` |
+| `--no-docker` | Desabilita controles do Docker (para clusters remotos) | `false` |
+
+### Exemplo Real
+
+Testando uma API de produção sem acesso ao Docker local:
+
+```bash
+node-balancer-dashboard \
+  --api-url https://api.minhaempresa.com/health \
+  --nodes mongodb://mongo-prod-1:27017,mongodb://mongo-prod-2:27017 \
+  --no-docker
 ```
 
 ---
