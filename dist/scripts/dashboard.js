@@ -18,70 +18,26 @@ const blessed_contrib_1 = __importDefault(require("blessed-contrib"));
 const mongodb_1 = require("mongodb");
 const http_1 = __importDefault(require("http"));
 const child_process_1 = require("child_process");
+const inquirer_1 = __importDefault(require("inquirer"));
+const socket_io_client_1 = require("socket.io-client");
 // Parse Args
 const args = process.argv.slice(2);
-function getArg(flag, def) {
+function getArg(flag, def = null) {
     const idx = args.indexOf(flag);
     return idx !== -1 && args[idx + 1] ? args[idx + 1] : def;
 }
-const API_URL = getArg('--api-url', 'http://localhost:3000/api/users');
-const NODES_ARG = getArg('--nodes', 'mongodb://localhost:27017/node-balancer,mongodb://localhost:27018/node-balancer,mongodb://localhost:27019/node-balancer');
-const DOCKER_CONTAINERS_ARG = getArg('--docker-containers', 'mongo1,mongo2,mongo3');
-const NO_DOCKER = args.includes('--no-docker');
-const NODES = NODES_ARG.split(',').map((uri, i) => ({
-    name: `node${i + 1}`,
-    uri: uri.trim()
-}));
-const DOCKER_NODES = DOCKER_CONTAINERS_ARG.split(',').map(n => n.trim());
-// Screen Setup
-const screen = blessed_1.default.screen({
-    smartCSR: true,
-    title: 'NodeBalancer Control Center'
-});
-const grid = new blessed_contrib_1.default.grid({ rows: 12, cols: 12, screen: screen });
-// Components
-const topologyTable = grid.set(0, 0, 6, 4, blessed_contrib_1.default.table, {
-    keys: true,
-    fg: 'white',
-    selectedFg: 'white',
-    selectedBg: 'blue',
-    interactive: false,
-    label: 'Cluster Topology',
-    border: { type: "line", fg: "cyan" },
-    columnSpacing: 3,
-    columnWidth: [10, 15, 10]
-});
-const latencyLine = grid.set(0, 4, 6, 8, blessed_contrib_1.default.line, {
-    style: { line: "yellow", text: "green", baseline: "black" },
-    xLabelPadding: 3,
-    xPadding: 5,
-    showLegend: true,
-    legend: { width: 20 },
-    label: 'API Response Time (ms)'
-});
-const logBox = grid.set(6, 0, 6, 8, blessed_contrib_1.default.log, {
-    fg: "green",
-    selectedFg: "green",
-    label: 'Execution Logs'
-});
-const controls = grid.set(6, 8, 6, 4, blessed_1.default.list, {
-    label: 'Actions (Enter to Execute)',
-    keys: true,
-    vi: true,
-    mouse: true,
-    style: { selected: { bg: 'blue' }, item: { fg: 'white' } },
-    items: [
-        'RUN CHAOS DEMO (Auto)',
-        'SEND BATCH (2 POST + 1 GET)',
-        ...(NO_DOCKER ? [] : [
-            'STOP PRIMARY',
-            ...DOCKER_NODES.map(n => `START ${n.toUpperCase()}`),
-            'START STACK'
-        ]),
-        'EXIT'
-    ]
-});
-// State
+// Global Config (Mutable)
+let API_URL = '';
+let NODES = [];
+let DOCKER_NODES = [];
+let NO_DOCKER = false;
+// TUI State (Lazy Init)
+let screen;
+let grid;
+let topologyTable;
+let latencyLine;
+let logBox;
+let controls;
 let latencyData = {
     title: 'Latency',
     x: Array(20).fill('.'),
@@ -89,6 +45,10 @@ let latencyData = {
 };
 // Utils
 function log(msg) {
+    if (!logBox) {
+        console.log(msg);
+        return;
+    }
     const time = new Date().toISOString().split('T')[1].split('.')[0];
     logBox.log(`[${time}] ${msg}`);
     screen.render();
@@ -133,6 +93,8 @@ function request(method) {
     });
 }
 function updateLatencyGraph(ms) {
+    if (!latencyLine)
+        return;
     latencyData.y.shift();
     latencyData.y.push(ms);
     latencyLine.setData([latencyData]);
@@ -157,6 +119,8 @@ function getPrimary() {
 }
 function updateTopology() {
     return __awaiter(this, void 0, void 0, function* () {
+        if (!topologyTable)
+            return;
         const rows = [];
         for (const node of NODES) {
             let status = 'DOWN';
@@ -164,7 +128,7 @@ function updateTopology() {
             try {
                 const client = new mongodb_1.MongoClient(node.uri, { serverSelectionTimeoutMS: 500, directConnection: true });
                 yield client.connect();
-                const db = client.db('node-balancer'); // Assuming DB name is consistent or part of URI, but here hardcoded for now or could be arg
+                const db = client.db('node-balancer');
                 const hello = yield db.command({ hello: 1 });
                 count = (yield db.collection('users').countDocuments()).toString();
                 yield client.close();
@@ -200,9 +164,7 @@ function runChaosDemo() {
         }
         else {
             // Chaos
-            const primaryName = yield getPrimary(); // returns node1, node2...
-            // We need to map node name to container name if they differ, but here we assume index matching or we need smarter logic
-            // For simplicity in this generic version, let's try to find the container name based on index
+            const primaryName = yield getPrimary();
             const primaryIndex = NODES.findIndex(n => n.name === primaryName);
             const containerName = primaryIndex !== -1 ? DOCKER_NODES[primaryIndex] : null;
             if (containerName) {
@@ -241,75 +203,199 @@ function runChaosDemo() {
         log('✅ DEMO COMPLETED');
     });
 }
-// Controls Event Handler
-controls.on('select', (item, index) => __awaiter(void 0, void 0, void 0, function* () {
-    const cmd = item.getText();
-    if (cmd.includes('RUN CHAOS DEMO')) {
-        runChaosDemo();
-    }
-    else if (cmd.includes('SEND BATCH')) {
-        runBatch();
-    }
-    else if (cmd.includes('STOP PRIMARY')) {
-        if (NO_DOCKER)
-            return log('Docker disabled.');
-        const pName = yield getPrimary();
-        const pIdx = NODES.findIndex(n => n.name === pName);
-        const container = pIdx !== -1 ? DOCKER_NODES[pIdx] : null;
-        if (container) {
-            log(`Stopping ${container}...`);
+function initTui() {
+    screen = blessed_1.default.screen({
+        smartCSR: true,
+        title: 'NodeBalancer Control Center'
+    });
+    grid = new blessed_contrib_1.default.grid({ rows: 12, cols: 12, screen: screen });
+    topologyTable = grid.set(0, 0, 6, 4, blessed_contrib_1.default.table, {
+        keys: true,
+        fg: 'white',
+        selectedFg: 'white',
+        selectedBg: 'blue',
+        interactive: false,
+        label: 'Cluster Topology',
+        border: { type: "line", fg: "cyan" },
+        columnSpacing: 3,
+        columnWidth: [10, 15, 10]
+    });
+    latencyLine = grid.set(0, 4, 6, 8, blessed_contrib_1.default.line, {
+        style: { line: "yellow", text: "green", baseline: "black" },
+        xLabelPadding: 3,
+        xPadding: 5,
+        showLegend: true,
+        legend: { width: 20 },
+        label: 'API Response Time (ms)'
+    });
+    logBox = grid.set(6, 0, 6, 8, blessed_contrib_1.default.log, {
+        fg: "green",
+        selectedFg: "green",
+        label: 'Execution Logs'
+    });
+    controls = grid.set(6, 8, 6, 4, blessed_1.default.list, {
+        label: 'Actions (Enter to Execute)',
+        keys: true,
+        vi: true,
+        mouse: true,
+        style: { selected: { bg: 'blue' }, item: { fg: 'white' } },
+        items: [
+            'RUN CHAOS DEMO (Auto)',
+            'SEND BATCH (2 POST + 1 GET)',
+            ...(NO_DOCKER ? [] : [
+                'STOP PRIMARY',
+                ...DOCKER_NODES.map(n => `START ${n.toUpperCase()}`),
+                'START STACK'
+            ]),
+            'EXIT'
+        ]
+    });
+    controls.on('select', (item, index) => __awaiter(this, void 0, void 0, function* () {
+        const cmd = item.getText();
+        if (cmd.includes('RUN CHAOS DEMO')) {
+            runChaosDemo();
+        }
+        else if (cmd.includes('SEND BATCH')) {
+            runBatch();
+        }
+        else if (cmd.includes('STOP PRIMARY')) {
+            if (NO_DOCKER)
+                return log('Docker disabled.');
+            const pName = yield getPrimary();
+            const pIdx = NODES.findIndex(n => n.name === pName);
+            const container = pIdx !== -1 ? DOCKER_NODES[pIdx] : null;
+            if (container) {
+                log(`Stopping ${container}...`);
+                try {
+                    (0, child_process_1.execSync)(`docker stop ${container}`);
+                    log('Stopped.');
+                }
+                catch (e) {
+                    log('Error.');
+                }
+            }
+            else {
+                log('No Primary found.');
+            }
+        }
+        else if (cmd.includes('START MONGO') || cmd.includes('START NODE')) {
+            if (NO_DOCKER)
+                return log('Docker disabled.');
+            const parts = cmd.split(' ');
+            const container = parts[1].toLowerCase();
+            log(`Starting ${container}...`);
             try {
-                (0, child_process_1.execSync)(`docker stop ${container}`);
-                log('Stopped.');
+                (0, child_process_1.execSync)(`docker start ${container}`);
+                log('Started.');
             }
             catch (e) {
                 log('Error.');
             }
         }
+        else if (cmd.includes('START STACK')) {
+            if (NO_DOCKER)
+                return log('Docker disabled.');
+            log('Starting stack...');
+            try {
+                (0, child_process_1.execSync)('docker-compose up -d');
+                log('Stack up.');
+            }
+            catch (e) {
+                log(`Error: ${e.message.split('\n')[0]}`);
+            }
+        }
+        else if (cmd.includes('EXIT')) {
+            process.exit(0);
+        }
+    }));
+    screen.key(['escape', 'q', 'C-c'], () => process.exit(0));
+    controls.focus();
+    screen.render();
+}
+// Main Execution
+function main() {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Check if flags are provided, otherwise prompt
+        const argApiUrl = getArg('--api-url');
+        const argNodes = getArg('--nodes');
+        const argDocker = getArg('--docker-containers');
+        const argNoDocker = args.includes('--no-docker');
+        if (argApiUrl && argNodes) {
+            // Non-interactive mode (Flags provided)
+            API_URL = argApiUrl;
+            NODES = argNodes.split(',').map((uri, i) => ({ name: `node${i + 1}`, uri: uri.trim() }));
+            DOCKER_NODES = (argDocker || 'mongo1,mongo2,mongo3').split(',').map(n => n.trim());
+            NO_DOCKER = argNoDocker;
+        }
         else {
-            log('No Primary found.');
+            // Interactive mode
+            console.clear();
+            console.log('🤖 NodeBalancer Dashboard Setup\n');
+            const answers = yield inquirer_1.default.prompt([
+                {
+                    type: 'input',
+                    name: 'apiUrl',
+                    message: 'API URL:',
+                    default: 'http://localhost:3000/api/users'
+                },
+                {
+                    type: 'input',
+                    name: 'nodes',
+                    message: 'MongoDB Nodes (comma separated):',
+                    default: 'mongodb://localhost:27017/node-balancer,mongodb://localhost:27018/node-balancer,mongodb://localhost:27019/node-balancer'
+                },
+                {
+                    type: 'confirm',
+                    name: 'enableDocker',
+                    message: 'Enable Docker Control (Stop/Start containers)?',
+                    default: true
+                },
+                {
+                    type: 'input',
+                    name: 'dockerContainers',
+                    message: 'Docker Container Names (comma separated):',
+                    default: 'mongo1,mongo2,mongo3',
+                    when: (answers) => answers.enableDocker
+                }
+            ]);
+            API_URL = answers.apiUrl;
+            NODES = answers.nodes.split(',').map((uri, i) => ({ name: `node${i + 1}`, uri: uri.trim() }));
+            NO_DOCKER = !answers.enableDocker;
+            DOCKER_NODES = (answers.dockerContainers || '').split(',').map((n) => n.trim());
         }
-    }
-    else if (cmd.includes('START MONGO') || cmd.includes('START NODE')) { // Generic match
+        // Init TUI AFTER prompts
+        initTui();
+        log('Control Center Ready.');
         if (NO_DOCKER)
-            return log('Docker disabled.');
-        // Extract container name from string "START MONGO1"
-        const parts = cmd.split(' ');
-        const container = parts[1].toLowerCase(); // mongo1
-        log(`Starting ${container}...`);
-        try {
-            (0, child_process_1.execSync)(`docker start ${container}`);
-            log('Started.');
-        }
-        catch (e) {
-            log('Error.');
-        }
-    }
-    else if (cmd.includes('START STACK')) {
-        if (NO_DOCKER)
-            return log('Docker disabled.');
-        log('Starting stack...');
-        try {
-            (0, child_process_1.execSync)('docker-compose up -d');
-            log('Stack up.');
-        }
-        catch (e) {
-            log(`Error: ${e.message.split('\n')[0]}`);
-        }
-    }
-    else if (cmd.includes('EXIT')) {
-        process.exit(0);
-    }
-}));
-// Loops
-setInterval(updateTopology, 2000);
-// Init
-controls.focus();
-log('Control Center Ready.');
-if (NO_DOCKER)
-    log('Docker Control: DISABLED');
-log(`API: ${API_URL}`);
-updateTopology();
-screen.render();
-// Exit
-screen.key(['escape', 'q', 'C-c'], () => process.exit(0));
+            log('Docker Control: DISABLED');
+        log(`API: ${API_URL}`);
+        // Init WebSocket
+        const socket = (0, socket_io_client_1.io)(API_URL.replace('/api/users', '').replace('/api', ''));
+        socket.on('connect', () => log('✅ WebSocket Connected'));
+        socket.on('disconnect', () => log('❌ WebSocket Disconnected'));
+        socket.on('log', (data) => {
+            let msg = '';
+            if (data.type === 'promote')
+                msg = `👑 NEW PRIMARY: ${data.payload.node}`;
+            else if (data.type === 'no-writable')
+                msg = `🚨 CRITICAL: NO WRITABLE NODES`;
+            else if (data.op)
+                msg = `${data.op.toUpperCase()} ${data.collection} (${data.durationMs}ms) ${data.success ? '✅' : '❌'}`;
+            else
+                msg = JSON.stringify(data);
+            log(`[WS] ${msg}`);
+        });
+        socket.on('topology-change', () => {
+            log(`[WS] Topology Change`);
+            updateTopology();
+        });
+        // Loops
+        setInterval(updateTopology, 2000);
+        updateTopology();
+    });
+}
+// Start
+main().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

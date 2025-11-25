@@ -17,13 +17,18 @@ Ideal se você já tem um cluster MongoDB e quer apenas visualizar/controlar.
     npm install -g replica-failover-mongodb-ts
     ```
 
-2.  **Rode apontando para o seu banco:**
+2.  **Rode o dashboard:**
     ```bash
-    node-balancer-dashboard \
-      --api-url http://localhost:3000/api/users \
-      --nodes mongodb://localhost:27017,mongodb://localhost:27018
+    node-balancer-dashboard
     ```
-    *(Substitua as URLs pelas do seu ambiente)*
+
+3.  **Responda às perguntas de configuração:**
+    O sistema pedirá os dados do seu ambiente. Exemplo de preenchimento:
+
+    -   **API URL**: `http://localhost:3000/api/users`
+    -   **MongoDB Nodes**: `mongodb://localhost:27017,mongodb://localhost:27018`
+    -   **Enable Docker Control?**: `Yes` (Se quiser parar/iniciar containers pelo painel)
+    -   **Docker Container Names**: `mongo1,mongo2,mongo3`
 
 ### Opção B: Via Git (Ambiente Completo)
 Ideal para ver a mágica acontecer do zero (cria API + Banco + Réplicas).

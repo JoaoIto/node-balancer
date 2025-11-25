@@ -1,6 +1,6 @@
 {
   "name": "replica-failover-mongodb-ts",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "O sistema replica um dos conceitos básicos da arquitetura de sistemas distribuído, na qual ele tem uma API em express.js com TypeScript, e usando o mongoDB com replicaSET e failover, consegue automáticamente garantir disponibilidade e redundância de dados das requisições.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,11 +31,13 @@
   "license": "ISC",
   "dependencies": {
     "@types/blessed": "^0.1.26",
+    "@types/inquirer": "^9.0.9",
     "axios": "^1.13.2",
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.11.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "inquirer": "^8.0.0",
     "mongoose": "^8.19.1",
     "morgan": "^1.10.1",
     "prom-client": "^15.1.3",
