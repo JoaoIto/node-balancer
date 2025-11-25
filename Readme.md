@@ -1,5 +1,21 @@
 # Node Balancer
 
+[![NPM Version](https://img.shields.io/npm/v/replica-failover-mongodb-ts?style=flat-square)](https://www.npmjs.com/package/replica-failover-mongodb-ts)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![Node.js](https://img.shields.io/badge/Node.js-20.x-green)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
+
+## 🚀 Quick Start (Dashboard CLI)
+
+Se você quer apenas rodar o painel de controle visualmente:
+
+```bash
+npm install -g replica-failover-mongodb-ts
+node-balancer-dashboard
+```
+
+---
+
 ## Sobre o Projeto: "Node Balancer"
 
 O Node Balancer é uma API escalável construída utilizando Node.js, MongoDB com replica set para alta disponibilidade, e Nginx como balanceador de carga. O sistema foi projetado para garantir resiliência, escalabilidade e alta disponibilidade. A arquitetura permite a adição manual de instâncias backend (Node.js) e garante que, em caso de falhas, o sistema continue operando sem interrupções, com a replicação automática dos dados e balanceamento de carga eficiente.
@@ -185,3 +201,18 @@ Se você está utilizando o **MongoDB replica set**, certifique-se de que o repl
     ```javascript
     rs.status();
     ```
+
+---
+
+## Autor
+
+| [<img src="https://github.com/JoaoIto.png" width="100px;" alt="João Ito"/>](https://github.com/JoaoIto) |
+| :---: |
+| **João Ito** |
+| [GitHub](https://github.com/JoaoIto) • [Email](mailto:joaovictorpfr@gmail.com) |
+
+Feito com ❤️ por João Ito. Entre em contato!
+
+## Licença
+
+Este projeto está licenciado sob a licença ISC - veja o arquivo [LICENSE](LICENSE) para detalhes.
