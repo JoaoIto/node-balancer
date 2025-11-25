@@ -23,12 +23,23 @@ jobs:
       - run: npm ci
       - run: npm run build
       
-      - name: Bump Version & Publish
+      - name: Bump Version, Publish & Release
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Bump version
           npm version patch -m "chore: bump version to %s [skip ci]"
+          
+          # Push commits and tags
+          git push --follow-tags
+          
+          # Publish to NPM
           npm publish
-          git push
+          
+          # Create GitHub Release
+          TAG_NAME=$(git describe --tags --abbrev=0)
+          gh release create "$TAG_NAME" --generate-notes
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
