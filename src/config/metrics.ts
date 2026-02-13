@@ -22,7 +22,28 @@ export const failoverCount = new client.Counter({
 export const operationDuration = new client.Histogram({
     name: 'node_balancer_operation_duration_seconds',
     help: 'Duration of database operations in seconds',
-    labelNames: ['operation', 'collection', 'success'],
+    labelNames: ['operation', 'collection', 'success', 'read_preference'],
     buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+    registers: [register]
+});
+
+export const poolSize = new client.Gauge({
+    name: 'node_balancer_pool_size',
+    help: 'Current size of the connection pool',
+    labelNames: ['type', 'node'],
+    registers: [register]
+});
+
+export const poolCheckedOut = new client.Gauge({
+    name: 'node_balancer_pool_checked_out',
+    help: 'Number of connections currently checked out',
+    labelNames: ['type', 'node'],
+    registers: [register]
+});
+
+export const poolWaitQueue = new client.Gauge({
+    name: 'node_balancer_pool_wait_queue',
+    help: 'Number of requests waiting for a connection',
+    labelNames: ['type', 'node'],
     registers: [register]
 });
