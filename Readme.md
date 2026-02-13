@@ -159,7 +159,20 @@ Basta passar a string de conexão padrão do MongoDB. A lib detecta automaticame
     ```
 
 
-### 🛰️ Monitoramento e Status (Plug & Play)
+### �️ Dashboard "Plug & Play" (Zero Config)
+
+O Dashboard do NodeBalancer é inteligente:
+1.  **Auto-Detecção**: Se você tiver um arquivo `.env` com `MONGODB_URI` ou `CONNECTION_STRING`, ele conecta automaticamente!
+2.  **Persistência**: Se você configurar manualmente, ele pergunta se quer salvar (cria um `dashboard.json`). Nas próximas vezes, abre direto!
+
+**Para rodar:**
+```bash
+npm run dashboard
+# ou
+npx replica-failover-mongodb-ts-dashboard
+```
+
+### �🛰️ Monitoramento e Status (Plug & Play)
 
 Você pode verificar a saúde das conexões a qualquer momento ou ouvir eventos em tempo real.
 
