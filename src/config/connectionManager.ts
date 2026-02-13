@@ -1,4 +1,4 @@
-
+import { EventEmitter } from 'events';
 import { MongoClient, Db } from 'mongodb';
 import axios from 'axios';
 import { logger } from '../middlewares/logger';
@@ -20,7 +20,7 @@ export interface ConnectionManagerOptions {
 
 export type ReadPreferenceMode = 'primary' | 'secondary' | 'secondaryPreferred';
 
-export class ConnectionManager {
+export class ConnectionManager extends EventEmitter {
     private primaryClient: MongoClient | null = null;
     private primaryDb: Db | null = null;
     private secondaryClients: MongoClient[] = [];
@@ -36,6 +36,7 @@ export class ConnectionManager {
     private minPoolSize: number;
 
     constructor(opts: ConnectionManagerOptions) {
+        super();
         this.replicaUri = opts.replicaUri;
         this.healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 5000;
         this.webhookUrl = opts.webhookUrl;
@@ -98,6 +99,7 @@ export class ConnectionManager {
                     minPoolSize: this.minPoolSize,
                     maxPoolSize: this.maxPoolSize
                 });
+                (c as any)._uri = this.replicaUri;
                 // Attach events BEFORE connecting to capture initial pool creation
                 this.attachPoolMonitor(c, 'primary', 'replica-uri');
 
@@ -107,6 +109,7 @@ export class ConnectionManager {
                     logger.info('Connected to replicaSet URI and found writable primary.');
                     this.attachClient(c);
                     this.startHealthChecks();
+                    this.emit('ready', { mode: 'replica-set', uri: this.replicaUri });
                     return;
                 } else {
                     logger.warn('Replica URI connected but did not find writable primary. Closing.');
@@ -130,6 +133,7 @@ export class ConnectionManager {
                     minPoolSize: this.minPoolSize,
                     maxPoolSize: this.maxPoolSize
                 });
+                (c as any)._uri = n.uri;
 
                 this.attachPoolMonitor(c, 'unknown', n.uri);
 
@@ -155,9 +159,22 @@ export class ConnectionManager {
 
         if (!this.primaryClient) {
             logger.warn('Initialized without a Primary node! System in Read-Only mode until a node becomes writable.');
+            this.emit('warn', 'Initialized in Read-Only mode (No Primary)');
+        } else {
+            this.emit('ready', { mode: 'multi-node' });
         }
 
         this.startHealthChecks();
+    }
+
+    public getStatus() {
+        return {
+            isConnected: !!this.primaryClient,
+            dbName: this.dbName,
+            primary: this.primaryClient ? (this.primaryClient as any)._uri : null,
+            secondaries: this.secondaryClients.map(c => (c as any)._uri),
+            totalNodes: (this.primaryClient ? 1 : 0) + this.secondaryClients.length
+        };
     }
 
     private attachPoolMonitor(client: MongoClient, type: string, nodeUri: string) {
@@ -182,16 +199,21 @@ export class ConnectionManager {
         this.primaryClient = client;
         this.primaryDb = client.db(this.dbName);
 
+        const uri = (client as any)._uri;
+        this.emit('primary-elected', { uri });
+
         client.on('topologyDescriptionChanged', (td) => {
             const summary = this.summarizeTopology(td);
             this.recordEvent('topologyDescriptionChanged', { td: summary }).catch(() => { });
             getIO()?.emit('topology-change', summary);
+            this.emit('topology-change', summary);
         });
 
         client.on('serverHeartbeatFailed', (event) => {
             logger.warn(`serverHeartbeatFailed: ${JSON.stringify(event)}`);
             this.recordEvent('serverHeartbeatFailed', { event }).catch(() => { });
             this.sendAlert('serverHeartbeatFailed', event).catch(() => { });
+            this.emit('server-heartbeat-failed', event);
         });
 
         client.on('serverHeartbeatSucceeded', (event) => {
@@ -201,6 +223,7 @@ export class ConnectionManager {
         client.on('close', () => {
             logger.warn('MongoClient close event');
             this.recordEvent('clientClose', {}).catch(() => { });
+            this.emit('close');
         });
 
         logger.info('Primary client attached.');
@@ -276,6 +299,7 @@ export class ConnectionManager {
                 this.primaryClient = null;
                 this.primaryDb = null;
                 connectionStatus.set(0);
+                this.emit('failover-start', { reason: 'Primary not writable' });
             }
         }
 
@@ -288,6 +312,7 @@ export class ConnectionManager {
                 logger.warn('Secondary node lost connection. Removing.');
                 try { await sec.close(); } catch { }
                 this.secondaryClients.splice(i, 1);
+                this.emit('node-lost', { count: this.secondaryClients.length });
             }
         }
 
@@ -304,6 +329,7 @@ export class ConnectionManager {
                     await this.recordEvent('promote', { message: 'Promoted secondary to primary' });
                     await this.sendAlert('promote', { message: 'Promoted new primary connection' });
                     failoverCount.inc();
+                    this.emit('failover-complete', { newPrimary: (client as any)._uri });
                     break;
                 }
             }
@@ -442,5 +468,6 @@ export class ConnectionManager {
         this.primaryClient = null;
         this.primaryDb = null;
         this.secondaryClients = [];
+        this.removeAllListeners();
     }
 }

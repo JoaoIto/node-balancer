@@ -155,9 +155,45 @@ Basta passar a string de conexão padrão do MongoDB. A lib detecta automaticame
     const products = await db.read('products', c => c.find().toArray(), {}, 'secondaryPreferred');
     ```
 
-### Modo Avançado (Manual)
+    const products = await db.read('products', c => c.find().toArray(), {}, 'secondaryPreferred');
+    ```
 
-Se precisar de controle granular sobre cada nó ou Health Checks customizados:
+
+### 🛰️ Monitoramento e Status (Plug & Play)
+
+Você pode verificar a saúde das conexões a qualquer momento ou ouvir eventos em tempo real.
+
+**Verificar Status:**
+```typescript
+const status = db.getStatus();
+console.log(status);
+/* Retorno:
+{
+  isConnected: true,
+  dbName: 'mydb',
+  primary: 'mongodb://mongo1:27017/mydb',
+  secondaries: ['mongodb://mongo2:27017/mydb'],
+  totalNodes: 2
+}
+*/
+```
+
+**Ouvir Eventos (Real-time):**
+A classe `ConnectionManager` emite eventos que você pode escutar:
+
+```typescript
+db.on('failover-start', (reason) => {
+    console.warn('⚠️ O banco principal caiu! Iniciando failover...', reason);
+});
+
+db.on('failover-complete', ({ newPrimary }) => {
+    console.info('✅ Novo banco principal eleito:', newPrimary);
+});
+
+db.on('node-lost', ({ count }) => {
+    console.error('❌ Um nó secundário caiu. Total restante:', count);
+});
+```
 
 ```typescript
 const db = new ConnectionManager({
