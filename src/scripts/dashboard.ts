@@ -8,6 +8,11 @@ import { execSync } from 'child_process';
 import inquirer from 'inquirer';
 import { io } from 'socket.io-client';
 
+// ... imports
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
 // Parse Args
 const args = process.argv.slice(2);
 function getArg(flag: string, def: string | null = null): string | null {
@@ -20,6 +25,10 @@ let API_URL = '';
 let NODES: { name: string; uri: string }[] = [];
 let DOCKER_NODES: string[] = [];
 let NO_DOCKER = false;
+
+// Config Persistence
+const CONFIG_FILE = path.join(process.cwd(), 'dashboard.json');
+dotenv.config();
 
 // TUI State (Lazy Init)
 let screen: blessed.Widgets.Screen;
@@ -284,14 +293,79 @@ async function main() {
     const argDocker = getArg('--docker-containers');
     const argNoDocker = args.includes('--no-docker');
 
+    // 1. Priority: Flags
     if (argApiUrl && argNodes) {
-        // Non-interactive mode (Flags provided)
         API_URL = argApiUrl;
         NODES = argNodes.split(',').map((uri, i) => ({ name: `node${i + 1}`, uri: uri.trim() }));
         DOCKER_NODES = (argDocker || 'mongo1,mongo2,mongo3').split(',').map(n => n.trim());
         NO_DOCKER = argNoDocker;
-    } else {
-        // Interactive mode
+    }
+    // 2. Priority: Config File
+    else if (fs.existsSync(CONFIG_FILE)) {
+        console.log('📄 Loading configuration from dashboard.json...');
+        try {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+            API_URL = config.apiUrl;
+            NODES = config.nodes;
+            DOCKER_NODES = config.dockerNodes;
+            NO_DOCKER = config.noDocker;
+        } catch (err) {
+            console.error('❌ Failed to load config file:', err);
+            process.exit(1);
+        }
+    }
+    // 3. Priority: Env Vars (Auto-Discovery)
+    else if (process.env.MONGODB_URI || process.env.MONGO_URL || process.env.CONNECTION_STRING) {
+        const envUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.CONNECTION_STRING;
+        console.log('🔍 Auto-detected MongoDB URI from .env');
+
+        // Parse Nodes
+        const uris = (envUri || '').split(',').map(u => u.trim());
+        NODES = uris.map((uri, i) => ({ name: `node${i + 1}`, uri }));
+
+        // Defaults for Docker
+        DOCKER_NODES = ['mongo1', 'mongo2', 'mongo3'];
+        NO_DOCKER = false;
+
+        console.log(`   Nodes: ${NODES.length} found`);
+
+        if (process.env.API_URL) {
+            API_URL = process.env.API_URL;
+            console.log(`   API: ${API_URL} (from .env)`);
+            console.log('   (To change this, run with flags or create dashboard.json)\n');
+            await sleep(1500);
+        } else {
+            console.log('⚠️  API_URL not found in .env');
+            const ans = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'apiUrl',
+                    message: 'Please enter API URL:',
+                    default: 'http://localhost:3000/api/users'
+                },
+                {
+                    type: 'confirm',
+                    name: 'save',
+                    message: '💾 Save this configuration (dashboard.json)?',
+                    default: true
+                }
+            ]);
+            API_URL = ans.apiUrl;
+
+            if (ans.save) {
+                fs.writeFileSync(CONFIG_FILE, JSON.stringify({
+                    apiUrl: API_URL,
+                    nodes: NODES,
+                    dockerNodes: DOCKER_NODES,
+                    noDocker: NO_DOCKER
+                }, null, 2));
+                console.log('✅ Configuration saved.');
+                await sleep(1000);
+            }
+        }
+    }
+    else {
+        // 4. Fallback: Interactive Mode
         console.clear();
         console.log('🤖 NodeBalancer Dashboard Setup\n');
 
@@ -320,6 +394,12 @@ async function main() {
                 message: 'Docker Container Names (comma separated):',
                 default: 'mongo1,mongo2,mongo3',
                 when: (answers) => answers.enableDocker
+            },
+            {
+                type: 'confirm',
+                name: 'save',
+                message: '💾 Save this configuration for next time?',
+                default: true
             }
         ]);
 
@@ -327,6 +407,17 @@ async function main() {
         NODES = answers.nodes.split(',').map((uri: string, i: number) => ({ name: `node${i + 1}`, uri: uri.trim() }));
         NO_DOCKER = !answers.enableDocker;
         DOCKER_NODES = (answers.dockerContainers || '').split(',').map((n: string) => n.trim());
+
+        if (answers.save) {
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify({
+                apiUrl: API_URL,
+                nodes: NODES,
+                dockerNodes: DOCKER_NODES,
+                noDocker: NO_DOCKER
+            }, null, 2));
+            console.log('✅ Configuration saved to dashboard.json');
+            await sleep(1000);
+        }
     }
 
     // Init TUI AFTER prompts
