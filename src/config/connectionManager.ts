@@ -8,6 +8,7 @@ import { connectionStatus, failoverCount, operationDuration, poolSize, poolCheck
 type NodeInfo = { uri: string; name: string };
 
 export interface ConnectionManagerOptions {
+    connectionString?: string;
     replicaUri?: string;
     nodes?: string[];
     dbName?: string;
@@ -36,12 +37,53 @@ export class ConnectionManager {
 
     constructor(opts: ConnectionManagerOptions) {
         this.replicaUri = opts.replicaUri;
-        this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
-        this.dbName = opts.dbName || 'node-balancer';
         this.healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 5000;
         this.webhookUrl = opts.webhookUrl;
         this.maxPoolSize = opts.maxPoolSize ?? 20;
         this.minPoolSize = opts.minPoolSize ?? 1;
+
+        let parsedDbName: string | undefined;
+
+        if (opts.connectionString) {
+            parsedDbName = this.parseConnectionString(opts.connectionString);
+        } else {
+            this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
+        }
+
+        // Use parsed dbName if allowed, or fallback to opts, or default
+        this.dbName = opts.dbName || parsedDbName || 'node-balancer';
+    }
+
+    private parseConnectionString(uri: string): string | undefined {
+        // Basic Regex to capture: protocol, auth(optional), hosts, db(optional), options(optional)
+        const regex = /^(mongodb(?:\+srv)?):\/\/((?:[^@\/]+@)?)?([^/?]+)(?:\/([^?]+))?(?:\?.*)?$/;
+        const match = uri.match(regex);
+        let foundDbName: string | undefined;
+
+        if (!match) {
+            logger.warn('Invalid connection string format. Fallback to manual nodes if provided.');
+            return undefined;
+        }
+
+        const protocol = match[1];
+        const auth = match[2] || '';
+        const hostsPart = match[3];
+        const dbPart = match[4];
+
+        if (dbPart) foundDbName = dbPart;
+
+        if (protocol === 'mongodb+srv') {
+            logger.info('Detected SRV connection string. Using as replicaUri.');
+            this.replicaUri = uri;
+        } else {
+            const hosts = hostsPart.split(',');
+            this.nodes = hosts.map((h, i) => ({
+                uri: `${protocol}://${auth}${h}`,
+                name: `node${i + 1}`
+            }));
+            logger.info(`Parsed ${this.nodes.length} nodes from connection string.`);
+        }
+        return foundDbName;
     }
 
     public async init(): Promise<void> {
@@ -56,7 +98,7 @@ export class ConnectionManager {
                     minPoolSize: this.minPoolSize,
                     maxPoolSize: this.maxPoolSize
                 });
-                // Attach events BEFORE connecting to capture initial pool creation (optional but good)
+                // Attach events BEFORE connecting to capture initial pool creation
                 this.attachPoolMonitor(c, 'primary', 'replica-uri');
 
                 await c.connect();
@@ -89,7 +131,7 @@ export class ConnectionManager {
                     maxPoolSize: this.maxPoolSize
                 });
 
-                this.attachPoolMonitor(c, 'unknown', n.uri); // Type unknown until verified
+                this.attachPoolMonitor(c, 'unknown', n.uri);
 
                 await c.connect();
                 connectedCount++;
@@ -98,10 +140,6 @@ export class ConnectionManager {
                 if (writable && !this.primaryClient) {
                     logger.info(`Found Primary node at ${n.uri}`);
                     this.attachClient(c);
-                    // Re-tag metrics if needed? 
-                    // Metrics are tagged by 'node' URI, so type label 'unknown' might be set once.
-                    // Ideally we update the label but exposed gauges don't support re-labeling easily without removing.
-                    // For now, node URI is the main identifier.
                 } else {
                     logger.info(`Connected to Secondary node at ${n.uri}`);
                     this.secondaryClients.push(c);
@@ -135,12 +173,8 @@ export class ConnectionManager {
             poolCheckedOut.dec(label);
         });
 
-        // 'connectionCheckOutStarted' indicates a request entered the queue (or is about to grab one)
-        // 'connectionCheckOutFailed' indicates it failed to get one (timeout)
-        // We can use these to track queue depth approximately.
         client.on('connectionCheckOutStarted', () => poolWaitQueue.inc(label));
         client.on('connectionCheckOutFailed', () => poolWaitQueue.dec(label));
-        // When successfully checked out, it also leaves the queue
         client.on('connectionCheckedOut', () => poolWaitQueue.dec(label));
     }
 
@@ -150,7 +184,6 @@ export class ConnectionManager {
 
         client.on('topologyDescriptionChanged', (td) => {
             const summary = this.summarizeTopology(td);
-            // logger.info(`topologyDescriptionChanged: ${JSON.stringify(summary)}`); 
             this.recordEvent('topologyDescriptionChanged', { td: summary }).catch(() => { });
             getIO()?.emit('topology-change', summary);
         });

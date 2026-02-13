@@ -120,7 +120,11 @@ O Node Balancer utiliza as seguintes tecnologias:
 
 ## Uso como Biblioteca (Library)
 
-Você pode usar o gerenciador de conexões resiliente deste projeto em sua própria aplicação Node.js.
+Você pode usar o gerenciador de conexões resiliente deste projeto em sua própria aplicação Node.js ou NestJS.
+
+### Modo Simples (Recomendado)
+
+Basta passar a string de conexão padrão do MongoDB. A lib detecta automaticamente os nós e o banco de dados.
 
 1.  **Instale a lib:**
     ```bash
@@ -131,17 +135,65 @@ Você pode usar o gerenciador de conexões resiliente deste projeto em sua próp
     ```typescript
     import { ConnectionManager } from 'replica-failover-mongodb-ts';
 
+    // ✨ Plug & Play: Apenas a string de conexão!
     const db = new ConnectionManager({
-        nodes: [
-            'mongodb://mongo1:27017/mydb',
-            'mongodb://mongo2:27017/mydb'
-        ],
-        healthCheckIntervalMs: 5000
+        connectionString: 'mongodb://mongo1:27017,mongo2:27017/mydb'
     });
 
     await db.init();
     const myCollection = db.getDb().collection('users');
     ```
+
+### Modo Avançado (Manual)
+
+Se precisar de controle granular sobre cada nó ou Health Checks customizados:
+
+```typescript
+const db = new ConnectionManager({
+    nodes: [
+        'mongodb://mongo1:27017/mydb',
+        'mongodb://mongo2:27017/mydb'
+    ],
+    healthCheckIntervalMs: 5000,
+    minPoolSize: 5
+});
+```
+
+### Uso com NestJS
+
+Se você usa NestJS, a integração é nativa:
+
+```typescript
+// app.module.ts
+import { Module } from '@nestjs/common';
+import { NodeBalancerModule } from 'replica-failover-mongodb-ts/dist/nestjs';
+
+@Module({
+  imports: [
+    NodeBalancerModule.forRoot({
+      connectionString: 'mongodb://localhost:27017,localhost:27018/mydb',
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+E para usar nos seus services:
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { InjectConnectionManager } from 'replica-failover-mongodb-ts/dist/nestjs';
+import { ConnectionManager } from 'replica-failover-mongodb-ts';
+
+@Injectable()
+export class UserService {
+  constructor(@InjectConnectionManager() private readonly db: ConnectionManager) {}
+
+  async getUsers() {
+    return this.db.read('users', (col) => col.find().toArray());
+  }
+}
+```
 
 ---
 
