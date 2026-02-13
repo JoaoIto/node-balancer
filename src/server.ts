@@ -12,7 +12,8 @@ app.get('/metrics', async (req, res) => {
         res.set('Content-Type', register.contentType);
         res.end(await register.metrics());
     } catch (ex) {
-        res.status(500).end(ex);
+        logger.error('Error while serving /metrics endpoint', ex);
+        res.status(500).end('Internal server error');
     }
 });
 
