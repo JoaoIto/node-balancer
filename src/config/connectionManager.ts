@@ -1,4 +1,4 @@
-
+import { EventEmitter } from 'events';
 import { MongoClient, Db } from 'mongodb';
 import axios from 'axios';
 import { logger } from '../middlewares/logger';
@@ -8,6 +8,7 @@ import { connectionStatus, failoverCount, operationDuration, poolSize, poolCheck
 type NodeInfo = { uri: string; name: string };
 
 export interface ConnectionManagerOptions {
+    connectionString?: string;
     replicaUri?: string;
     nodes?: string[];
     dbName?: string;
@@ -19,7 +20,7 @@ export interface ConnectionManagerOptions {
 
 export type ReadPreferenceMode = 'primary' | 'secondary' | 'secondaryPreferred';
 
-export class ConnectionManager {
+export class ConnectionManager extends EventEmitter {
     private primaryClient: MongoClient | null = null;
     private primaryDb: Db | null = null;
     private secondaryClients: MongoClient[] = [];
@@ -35,13 +36,55 @@ export class ConnectionManager {
     private minPoolSize: number;
 
     constructor(opts: ConnectionManagerOptions) {
+        super();
         this.replicaUri = opts.replicaUri;
-        this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
-        this.dbName = opts.dbName || 'node-balancer';
         this.healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 5000;
         this.webhookUrl = opts.webhookUrl;
         this.maxPoolSize = opts.maxPoolSize ?? 20;
         this.minPoolSize = opts.minPoolSize ?? 1;
+
+        let parsedDbName: string | undefined;
+
+        if (opts.connectionString) {
+            parsedDbName = this.parseConnectionString(opts.connectionString);
+        } else {
+            this.nodes = (opts.nodes || []).map((u, i) => ({ uri: u, name: `node${i + 1}` }));
+        }
+
+        // Use parsed dbName if allowed, or fallback to opts, or default
+        this.dbName = opts.dbName || parsedDbName || 'node-balancer';
+    }
+
+    private parseConnectionString(uri: string): string | undefined {
+        // Basic Regex to capture: protocol, auth(optional), hosts, db(optional), options(optional)
+        const regex = /^(mongodb(?:\+srv)?):\/\/((?:[^@\/]+@)?)?([^/?]+)(?:\/([^?]+))?(?:\?.*)?$/;
+        const match = uri.match(regex);
+        let foundDbName: string | undefined;
+
+        if (!match) {
+            logger.warn('Invalid connection string format. Fallback to manual nodes if provided.');
+            return undefined;
+        }
+
+        const protocol = match[1];
+        const auth = match[2] || '';
+        const hostsPart = match[3];
+        const dbPart = match[4];
+
+        if (dbPart) foundDbName = dbPart;
+
+        if (protocol === 'mongodb+srv') {
+            logger.info('Detected SRV connection string. Using as replicaUri.');
+            this.replicaUri = uri;
+        } else {
+            const hosts = hostsPart.split(',');
+            this.nodes = hosts.map((h, i) => ({
+                uri: `${protocol}://${auth}${h}`,
+                name: `node${i + 1}`
+            }));
+            logger.info(`Parsed ${this.nodes.length} nodes from connection string.`);
+        }
+        return foundDbName;
     }
 
     public async init(): Promise<void> {
@@ -56,7 +99,8 @@ export class ConnectionManager {
                     minPoolSize: this.minPoolSize,
                     maxPoolSize: this.maxPoolSize
                 });
-                // Attach events BEFORE connecting to capture initial pool creation (optional but good)
+                (c as any)._uri = this.replicaUri;
+                // Attach events BEFORE connecting to capture initial pool creation
                 this.attachPoolMonitor(c, 'primary', 'replica-uri');
 
                 await c.connect();
@@ -65,6 +109,7 @@ export class ConnectionManager {
                     logger.info('Connected to replicaSet URI and found writable primary.');
                     this.attachClient(c);
                     this.startHealthChecks();
+                    this.emit('ready', { mode: 'replica-set', uri: this.replicaUri });
                     return;
                 } else {
                     logger.warn('Replica URI connected but did not find writable primary. Closing.');
@@ -88,8 +133,9 @@ export class ConnectionManager {
                     minPoolSize: this.minPoolSize,
                     maxPoolSize: this.maxPoolSize
                 });
+                (c as any)._uri = n.uri;
 
-                this.attachPoolMonitor(c, 'unknown', n.uri); // Type unknown until verified
+                this.attachPoolMonitor(c, 'unknown', n.uri);
 
                 await c.connect();
                 connectedCount++;
@@ -98,10 +144,6 @@ export class ConnectionManager {
                 if (writable && !this.primaryClient) {
                     logger.info(`Found Primary node at ${n.uri}`);
                     this.attachClient(c);
-                    // Re-tag metrics if needed? 
-                    // Metrics are tagged by 'node' URI, so type label 'unknown' might be set once.
-                    // Ideally we update the label but exposed gauges don't support re-labeling easily without removing.
-                    // For now, node URI is the main identifier.
                 } else {
                     logger.info(`Connected to Secondary node at ${n.uri}`);
                     this.secondaryClients.push(c);
@@ -117,9 +159,22 @@ export class ConnectionManager {
 
         if (!this.primaryClient) {
             logger.warn('Initialized without a Primary node! System in Read-Only mode until a node becomes writable.');
+            this.emit('warn', 'Initialized in Read-Only mode (No Primary)');
+        } else {
+            this.emit('ready', { mode: 'multi-node' });
         }
 
         this.startHealthChecks();
+    }
+
+    public getStatus() {
+        return {
+            isConnected: !!this.primaryClient,
+            dbName: this.dbName,
+            primary: this.primaryClient ? (this.primaryClient as any)._uri : null,
+            secondaries: this.secondaryClients.map(c => (c as any)._uri),
+            totalNodes: (this.primaryClient ? 1 : 0) + this.secondaryClients.length
+        };
     }
 
     private attachPoolMonitor(client: MongoClient, type: string, nodeUri: string) {
@@ -135,12 +190,8 @@ export class ConnectionManager {
             poolCheckedOut.dec(label);
         });
 
-        // 'connectionCheckOutStarted' indicates a request entered the queue (or is about to grab one)
-        // 'connectionCheckOutFailed' indicates it failed to get one (timeout)
-        // We can use these to track queue depth approximately.
         client.on('connectionCheckOutStarted', () => poolWaitQueue.inc(label));
         client.on('connectionCheckOutFailed', () => poolWaitQueue.dec(label));
-        // When successfully checked out, it also leaves the queue
         client.on('connectionCheckedOut', () => poolWaitQueue.dec(label));
     }
 
@@ -148,17 +199,21 @@ export class ConnectionManager {
         this.primaryClient = client;
         this.primaryDb = client.db(this.dbName);
 
+        const uri = (client as any)._uri;
+        this.emit('primary-elected', { uri });
+
         client.on('topologyDescriptionChanged', (td) => {
             const summary = this.summarizeTopology(td);
-            // logger.info(`topologyDescriptionChanged: ${JSON.stringify(summary)}`); 
             this.recordEvent('topologyDescriptionChanged', { td: summary }).catch(() => { });
             getIO()?.emit('topology-change', summary);
+            this.emit('topology-change', summary);
         });
 
         client.on('serverHeartbeatFailed', (event) => {
             logger.warn(`serverHeartbeatFailed: ${JSON.stringify(event)}`);
             this.recordEvent('serverHeartbeatFailed', { event }).catch(() => { });
             this.sendAlert('serverHeartbeatFailed', event).catch(() => { });
+            this.emit('server-heartbeat-failed', event);
         });
 
         client.on('serverHeartbeatSucceeded', (event) => {
@@ -168,6 +223,7 @@ export class ConnectionManager {
         client.on('close', () => {
             logger.warn('MongoClient close event');
             this.recordEvent('clientClose', {}).catch(() => { });
+            this.emit('close');
         });
 
         logger.info('Primary client attached.');
@@ -243,6 +299,7 @@ export class ConnectionManager {
                 this.primaryClient = null;
                 this.primaryDb = null;
                 connectionStatus.set(0);
+                this.emit('failover-start', { reason: 'Primary not writable' });
             }
         }
 
@@ -255,6 +312,7 @@ export class ConnectionManager {
                 logger.warn('Secondary node lost connection. Removing.');
                 try { await sec.close(); } catch { }
                 this.secondaryClients.splice(i, 1);
+                this.emit('node-lost', { count: this.secondaryClients.length });
             }
         }
 
@@ -271,6 +329,7 @@ export class ConnectionManager {
                     await this.recordEvent('promote', { message: 'Promoted secondary to primary' });
                     await this.sendAlert('promote', { message: 'Promoted new primary connection' });
                     failoverCount.inc();
+                    this.emit('failover-complete', { newPrimary: (client as any)._uri });
                     break;
                 }
             }
@@ -409,5 +468,6 @@ export class ConnectionManager {
         this.primaryClient = null;
         this.primaryDb = null;
         this.secondaryClients = [];
+        this.removeAllListeners();
     }
 }
