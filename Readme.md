@@ -141,7 +141,18 @@ Basta passar a string de conexão padrão do MongoDB. A lib detecta automaticame
     });
 
     await db.init();
-    const myCollection = db.getDb().collection('users');
+    
+    // ✅ Failover automático para QUALQUER collection
+    // Você NÃO precisa configurar as collections antes. Basta usar o nome.
+    
+    // Leitura na collection 'users'
+    const users = await db.read('users', c => c.find().toArray());
+    
+    // Escrita na collection 'logs'
+    await db.write('logs', c => c.insertOne({ event: 'login' }));
+    
+    // Leitura na collection 'products' com preferência Secundária
+    const products = await db.read('products', c => c.find().toArray(), {}, 'secondaryPreferred');
     ```
 
 ### Modo Avançado (Manual)
