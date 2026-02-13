@@ -7,7 +7,7 @@ import { connectionStatus, failoverCount, operationDuration, poolSize, poolCheck
 
 type NodeInfo = { uri: string; name: string };
 
-interface ConnectionManagerOptions {
+export interface ConnectionManagerOptions {
     replicaUri?: string;
     nodes?: string[];
     dbName?: string;
